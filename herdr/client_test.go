@@ -46,7 +46,35 @@ func TestHelperProcess(t *testing.T) {
 
 	switch subCmd {
 	case "status":
+		if mode == "tmux_fallback" {
+			os.Exit(1)
+		}
 		fmt.Print(`{"server":{"status":"running","running":true,"socket":"/tmp/test.sock"}}`)
+	case "list-panes":
+		fmt.Print("%0|1|1|claude-code\n")
+	case "capture-pane":
+		fmt.Print("Deploy to staging? (y/n)")
+	case "send-keys":
+		os.Exit(0)
+	case "agent":
+		agentAction := ""
+		if len(args) > 2 {
+			agentAction = args[2]
+		}
+		switch agentAction {
+		case "list":
+			if mode == "agent_blocked" {
+				fmt.Print(`{"result":{"agents":[{"agent":"claude","agent_status":"idle","focused":true,"pane_id":"w1:p1","terminal_title":"claude"},{"agent":"agy","agent_status":"blocked","focused":false,"pane_id":"w1:p2","terminal_title":"agy"}]}}`)
+			} else {
+				os.Exit(1)
+			}
+		case "prompt":
+			os.Exit(0)
+		case "wait":
+			os.Exit(0)
+		default:
+			os.Exit(0)
+		}
 	case "pane":
 		paneAction := ""
 		if len(args) > 2 {
@@ -66,6 +94,12 @@ func TestHelperProcess(t *testing.T) {
 			switch mode {
 			case "pattern_prompt":
 				fmt.Print(`Do you want to apply these changes? (y/n)`)
+			case "old_scrollback":
+				fmt.Print("Old prompt: Deploy? (y/n)\nResult: y\nStep 1\nStep 2\nCompiling...\nTests passed\nBuild succeeded\nmiquel@mac ~ %")
+			case "agy_tui":
+				fmt.Print("Allow editing /tmp/a?\n❯ 1. Yes\n  2. Always allow\n  3. No\nEnter to confirm · Esc to cancel")
+			case "approve_word":
+				fmt.Print("git log: fix(security): approve flow\nmiquel@mac ~ %")
 			case "blocked":
 				fmt.Print(`Approval required for file edit.`)
 			default:
@@ -117,10 +151,119 @@ func TestGetStatus_PromptPattern(t *testing.T) {
 	}
 }
 
-func TestGetStatus_FallbackOnError(t *testing.T) {
+func TestGetStatus_OldScrollbackNoFalsePositive(t *testing.T) {
 	oldExec := execCommand
 	defer func() { execCommand = oldExec }()
 	execCommand = fakeExecCommand
+
+	t.Setenv("TEST_HERDR_MODE", "old_scrollback")
+	status, err := GetStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Waiting {
+		t.Errorf("expected waiting to be false when (y/n) is only in old scrollback")
+	}
+}
+
+func TestGetStatus_AgentListAndPromptSubmit(t *testing.T) {
+	oldExec := execCommand
+	defer func() { execCommand = oldExec }()
+	execCommand = fakeExecCommand
+
+	t.Setenv("TEST_HERDR_MODE", "agent_blocked")
+	status, err := GetStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !status.Waiting {
+		t.Errorf("expected waiting=true for blocked agent from agent list")
+	}
+	if status.PaneID != "w1:p2" {
+		t.Errorf("expected blocked agent pane w1:p2, got %s", status.PaneID)
+	}
+	if err := SendAction("ahora escribe /tmp/b un hola"); err != nil {
+		t.Errorf("expected SendAction via agent prompt to succeed, got %v", err)
+	}
+}
+
+func TestGetStatus_AgyTUIPrompt(t *testing.T) {
+	oldExec := execCommand
+	defer func() { execCommand = oldExec }()
+	execCommand = fakeExecCommand
+
+	t.Setenv("TEST_HERDR_MODE", "agy_tui")
+	status, err := GetStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !status.Waiting {
+		t.Errorf("expected waiting=true for agy TUI approval dialog")
+	}
+}
+
+func TestGetStatus_ApproveWordInOutputNoFalsePositive(t *testing.T) {
+	oldExec := execCommand
+	defer func() { execCommand = oldExec }()
+	execCommand = fakeExecCommand
+
+	t.Setenv("TEST_HERDR_MODE", "approve_word")
+	status, err := GetStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Waiting {
+		t.Errorf("expected waiting to be false when output only mentions the word 'approve'")
+	}
+}
+
+func TestGetStatus_TmuxFallback(t *testing.T) {
+	oldExec := execCommand
+	oldLook := lookPath
+	defer func() {
+		execCommand = oldExec
+		lookPath = oldLook
+	}()
+	execCommand = fakeExecCommand
+	lookPath = func(file string) (string, error) { return file, nil }
+
+	t.Setenv("TEST_HERDR_MODE", "tmux_fallback")
+	status, err := GetStatus()
+	if err != nil {
+		t.Fatalf("unexpected error on tmux fallback: %v", err)
+	}
+	if !status.HerdrOnline {
+		t.Errorf("expected HerdrOnline=true on tmux fallback")
+	}
+	if status.AgentState != "tmux" || status.PaneID != "%0" {
+		t.Errorf("expected tmux pane %%0, got state=%q pane=%q", status.AgentState, status.PaneID)
+	}
+	if !status.Waiting {
+		t.Errorf("expected waiting=true for tmux (y/n) prompt")
+	}
+
+	if err := SendAction("approve"); err != nil {
+		t.Errorf("SendAction(approve) over tmux failed: %v", err)
+	}
+	if err := SendAction("custom input"); err != nil {
+		t.Errorf("SendAction(custom input) over tmux failed: %v", err)
+	}
+}
+
+func TestGetStatus_FallbackOnError(t *testing.T) {
+	oldExec := execCommand
+	oldLook := lookPath
+	defer func() {
+		execCommand = oldExec
+		lookPath = oldLook
+	}()
+	execCommand = fakeExecCommand
+	lookPath = func(file string) (string, error) {
+		if file == "tmux" {
+			return "", fmt.Errorf("tmux not found")
+		}
+		return file, nil
+	}
 
 	t.Setenv("TEST_HERDR_MODE", "fail")
 	status, err := GetStatus()
@@ -133,7 +276,7 @@ func TestGetStatus_FallbackOnError(t *testing.T) {
 	if status.Waiting {
 		t.Errorf("expected waiting to be false on error")
 	}
-	if status.Output != "⚡ Herdr offline or inactive" {
+	if status.Output != "⚡ Herdr / tmux offline or inactive" {
 		t.Errorf("unexpected fallback output: %s", status.Output)
 	}
 }

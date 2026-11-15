@@ -3,6 +3,7 @@ package notify
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -38,14 +39,36 @@ func (n *NtfyNotifier) TopicURL() string {
 	return fmt.Sprintf("%s/%s", n.ServerURL, n.Topic)
 }
 
+// stripTokenParam removes any sensitive token query parameter before sending URLs over ntfy.
+func stripTokenParam(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	q := u.Query()
+	q.Del("token")
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
 // Notify publishes an actionable notification to the ntfy topic.
 func (n *NtfyNotifier) Notify(event NotificationEvent) error {
 	if n.Topic == "" {
 		return nil
 	}
 
+	// Never leak raw terminal output, code, or potential secrets to the public ntfy.sh relay.
+	body := event.Body
+	if strings.EqualFold(n.ServerURL, "https://ntfy.sh") || strings.EqualFold(n.ServerURL, "http://ntfy.sh") {
+		if event.PaneID != "" {
+			body = fmt.Sprintf("Agent paused in pane %s waiting for human approval. Open Guaita to inspect and respond.", event.PaneID)
+		} else {
+			body = "Agent paused waiting for human approval. Open Guaita to inspect and respond."
+		}
+	}
+
 	endpoint := fmt.Sprintf("%s/%s", n.ServerURL, n.Topic)
-	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(event.Body))
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -54,16 +77,16 @@ func (n *NtfyNotifier) Notify(event NotificationEvent) error {
 	req.Header.Set("Priority", "high")
 	req.Header.Set("Tags", "warning,robot")
 
-	// Construct interactive actions for iOS notification banner
+	// Construct interactive actions for iOS notification banner without leaking session tokens.
 	actions := make([]string, 0)
-	if event.ActionApproveURL != "" {
-		actions = append(actions, fmt.Sprintf("http, ✓ Approve (Y), %s, method=POST", event.ActionApproveURL))
+	if safeApprove := stripTokenParam(event.ActionApproveURL); safeApprove != "" {
+		actions = append(actions, fmt.Sprintf("http, ✓ Approve (Y), %s, method=POST", safeApprove))
 	}
-	if event.ActionRejectURL != "" {
-		actions = append(actions, fmt.Sprintf("http, ✕ Reject (N), %s, method=POST", event.ActionRejectURL))
+	if safeReject := stripTokenParam(event.ActionRejectURL); safeReject != "" {
+		actions = append(actions, fmt.Sprintf("http, ✕ Reject (N), %s, method=POST", safeReject))
 	}
-	if event.PairingURL != "" {
-		actions = append(actions, fmt.Sprintf("view, 📱 Open Guaita, %s", event.PairingURL))
+	if safePairing := stripTokenParam(event.PairingURL); safePairing != "" {
+		actions = append(actions, fmt.Sprintf("view, 📱 Open Guaita, %s", safePairing))
 	}
 
 	if len(actions) > 0 {

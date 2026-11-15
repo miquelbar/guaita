@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release version
+        id: version
+        run: |
+          git fetch --tags --force || true
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v0.1.0"
+          else
+            BASE="${LATEST#v}"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE"
+            MAJOR="${MAJOR:-0}"
+            MINOR="${MINOR:-1}"
+            PATCH="${PATCH:-0}"
+            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "tag=${NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.2"
+
+      - name: Verify tests and vet
+        run: |
+          go test -count=1 ./...
+          go vet ./...
+
+      - name: Build cross-platform release archives
+        run: |
+          mkdir -p dist
+          VERSION="${{ steps.version.outputs.tag }}"
+          targets=(
+            "darwin amd64"
+            "darwin arm64"
+            "linux amd64"
+            "linux arm64"
+          )
+          for target in "${targets[@]}"; do
+            set -- $target
+            GOOS="$1"
+            GOARCH="$2"
+            PKG_DIR="guaita_${VERSION}_${GOOS}_${GOARCH}"
+            mkdir -p "dist/${PKG_DIR}"
+            CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" go build -trimpath -ldflags="-s -w" -o "dist/${PKG_DIR}/guaita" .
+            cp LICENSE README.md "dist/${PKG_DIR}/"
+            tar -C dist -czf "dist/${PKG_DIR}.tar.gz" "${PKG_DIR}"
+            rm -rf "dist/${PKG_DIR}"
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

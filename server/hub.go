@@ -75,7 +75,9 @@ func (h *Hub) Disconnect(clientID string) bool {
 
 	for conn, info := range h.clients {
 		if info.ID == clientID {
-			_ = conn.Close()
+			if conn != nil {
+				_ = conn.Close()
+			}
 			delete(h.clients, conn)
 			return true
 		}
@@ -88,4 +90,63 @@ func (h *Hub) Count() int {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return len(h.clients)
+}
+
+// RemoteCount returns the number of active non-loopback client connections.
+func (h *Hub) RemoteCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	count := 0
+	for _, info := range h.clients {
+		if !info.IsLocalhost {
+			count++
+		}
+	}
+	return count
+}
+
+// DisconnectRemote closes and removes all non-loopback client connections.
+func (h *Hub) DisconnectRemote() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	closed := 0
+	for conn, info := range h.clients {
+		if !info.IsLocalhost {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			delete(h.clients, conn)
+			closed++
+		}
+	}
+	return closed
+}
+
+// GetClientIP returns the IP address (without port) for a connected client ID.
+func (h *Hub) GetClientIP(clientID string) (string, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, info := range h.clients {
+		if info.ID == clientID {
+			return clientIP(info.RemoteAddr), true
+		}
+	}
+	return "", false
+}
+
+// DisconnectByIP closes and removes all non-localhost connections matching the given IP.
+func (h *Hub) DisconnectByIP(ip string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	closed := 0
+	for conn, info := range h.clients {
+		if !info.IsLocalhost && clientIP(info.RemoteAddr) == ip {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			delete(h.clients, conn)
+			closed++
+		}
+	}
+	return closed
 }

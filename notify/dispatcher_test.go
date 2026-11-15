@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,11 +111,44 @@ func TestNtfyNotifier_Delivery(t *testing.T) {
 	if capturedPriority != "high" {
 		t.Errorf("expected high priority, got %s", capturedPriority)
 	}
-	if capturedBody != "Please confirm task" {
-		t.Errorf("unexpected body: %s", capturedBody)
+	expectedRedacted := "Agent paused waiting for human approval. Open Guaita to inspect and respond."
+	if capturedBody != expectedRedacted {
+		t.Errorf("expected redacted body for public ntfy.sh, got: %s", capturedBody)
 	}
 	if len(capturedActions) == 0 {
 		t.Errorf("expected actions header to be set")
+	}
+	if strings.Contains(capturedActions, "token=123") {
+		t.Errorf("expected ntfy Actions header to strip sensitive token query parameter, got: %s", capturedActions)
+	}
+}
+
+func TestTelegramNotifier_Authorization(t *testing.T) {
+	tg := &TelegramNotifier{
+		Token:  "test-token",
+		ChatID: "999999",
+	}
+
+	// Authorized chat ID
+	msgAuth := &struct {
+		Chat struct {
+			ID int64 `json:"id"`
+		} `json:"chat"`
+	}{}
+	msgAuth.Chat.ID = 999999
+	if !tg.isAuthorizedCallback(111111, msgAuth) {
+		t.Errorf("expected authorized chat ID to pass")
+	}
+
+	// Unauthorized chat ID and user ID
+	msgEvil := &struct {
+		Chat struct {
+			ID int64 `json:"id"`
+		} `json:"chat"`
+	}{}
+	msgEvil.Chat.ID = 888888
+	if tg.isAuthorizedCallback(777777, msgEvil) {
+		t.Errorf("expected unauthorized chat/user ID to be rejected")
 	}
 }
 
@@ -149,6 +183,50 @@ func TestTelegramNotifier_Delivery(t *testing.T) {
 	}
 	if capturedBody["chat_id"] != "12345" {
 		t.Errorf("expected chat_id 12345, got %v", capturedBody["chat_id"])
+	}
+	if capturedBody["parse_mode"] != "HTML" {
+		t.Errorf("expected parse_mode HTML, got %v", capturedBody["parse_mode"])
+	}
+}
+
+func TestTelegramNotifier_HTMLAndErrorDetailsRegression(t *testing.T) {
+	var capturedPayload map[string]interface{}
+
+	client := &http.Client{
+		Transport: mockTransport(func(r *http.Request) (*http.Response, error) {
+			_ = json.NewDecoder(r.Body).Decode(&capturedPayload)
+			return &http.Response{
+				StatusCode: http.StatusBadRequest,
+				Body:       io.NopCloser(bytes.NewReader([]byte(`{"ok":false,"description":"Bad Request: chat not found"}`))),
+			}, nil
+		}),
+	}
+
+	tg := &TelegramNotifier{
+		Token:  "test-token",
+		ChatID: "12345",
+		Client: client,
+	}
+
+	err := tg.Notify(NotificationEvent{
+		Title:      "Alert",
+		Body:       "check <tag> & _underscore_ *star* ```backticks```",
+		PaneID:     "w1:p1",
+		PairingURL: "https://192.168.10.1:8085/",
+	})
+	if err == nil || !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("expected error containing Telegram description, got: %v", err)
+	}
+
+	text, _ := capturedPayload["text"].(string)
+	if !strings.Contains(text, "&lt;tag&gt; &amp;") {
+		t.Errorf("expected HTML-escaped body in Telegram payload, got: %s", text)
+	}
+
+	markup, _ := capturedPayload["reply_markup"].(map[string]interface{})
+	kb, _ := markup["inline_keyboard"].([]interface{})
+	if len(kb) != 1 {
+		t.Errorf("expected 1 inline_keyboard row (no private-IP url button row), got %d", len(kb))
 	}
 }
 

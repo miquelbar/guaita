@@ -19,6 +19,7 @@ type AdminPageData struct {
 	NtfyURL         string
 	NtfyQRBase64    string
 	TelegramActive  bool
+	CSPNonce        string
 }
 
 // GenerateQRBase64 encodes a target URL into a Base64-encoded PNG image string.
@@ -32,7 +33,12 @@ func GenerateQRBase64(targetURL string) string {
 
 // RenderMobileHTML renders the mobile-optimized Sentinel Gate interface in English.
 func RenderMobileHTML(sessionDays int) string {
-	return fmt.Sprintf(mobileTemplate, sessionDays)
+	return RenderMobileHTMLWithNonce(sessionDays, "")
+}
+
+// RenderMobileHTMLWithNonce renders the mobile-optimized Sentinel Gate interface with a CSP script nonce.
+func RenderMobileHTMLWithNonce(sessionDays int, nonce string) string {
+	return fmt.Sprintf(mobileTemplate, sessionDays, nonce)
 }
 
 // RenderAdminHTML renders the full Localhost Admin & Control Center interface in English.
@@ -52,6 +58,7 @@ func RenderAdminHTML(data AdminPageData) string {
 		data.NtfyTopic,
 		data.NtfyURL,
 		tgStatus,
+		data.CSPNonce,
 	)
 }
 
@@ -361,25 +368,25 @@ const mobileTemplate = `<!DOCTYPE html>
             </div>
         </div>
         <div class="view-toggle">
-            <button type="button" id="tabChat" class="toggle-btn active" onclick="switchView('chat')">💬 Chat</button>
-            <button type="button" id="tabTerminal" class="toggle-btn" onclick="switchView('terminal')">💻 Raw</button>
+            <button type="button" id="tabChat" class="toggle-btn active" data-view="chat">💬 Chat</button>
+            <button type="button" id="tabTerminal" class="toggle-btn" data-view="terminal">💻 Raw</button>
         </div>
     </header>
 
     <!-- Main ChatGPT-style message stream -->
     <div id="chatView" class="chat-container">
-        <div class="message-row agent">
+        <div id="agentStatusRow" class="message-row agent">
             <div class="msg-avatar agent">🤖</div>
             <div class="msg-content">
-                <div style="font-size: 0.72rem; color: var(--accent); font-weight: 600; margin-bottom: 4px;">HERDR SENTINEL</div>
+                <div style="font-size: 0.72rem; color: var(--accent); font-weight: 600; margin-bottom: 4px;">HERDR SENTINEL <span id="agentTime" style="color: var(--text-dim); font-weight: 400; margin-left: 6px;"></span></div>
                 <div id="agentText">Connected to Herdr agent workspace. Monitoring terminal for prompts...</div>
                 <div id="terminalSnippet" class="terminal-block">Loading initial agent buffer...</div>
                 <div id="approvalCard" class="approval-card" style="display: none;">
                     <div class="approval-title">⚠️ Approval Requested</div>
                     <div style="font-size: 0.8rem; color: #cbd5e1;">Agent is paused awaiting human confirmation:</div>
                     <div class="action-pills">
-                        <button type="button" class="pill-btn pill-approve" onclick="sendAction('approve')">✓ APPROVE (Y)</button>
-                        <button type="button" class="pill-btn pill-reject" onclick="sendAction('reject')">✕ REJECT (N)</button>
+                        <button type="button" class="pill-btn pill-approve" data-action="approve">✓ APPROVE (Y)</button>
+                        <button type="button" class="pill-btn pill-reject" data-action="reject">✕ REJECT (N)</button>
                     </div>
                 </div>
             </div>
@@ -392,12 +399,12 @@ const mobileTemplate = `<!DOCTYPE html>
     <!-- Bottom ChatGPT-style bar -->
     <div class="bottom-bar">
         <div class="quick-chips">
-            <button type="button" class="chip" onclick="sendAction('approve')">✓ Approve (Y)</button>
-            <button type="button" class="chip" onclick="sendAction('reject')">✕ Reject (N)</button>
-            <button type="button" class="chip" onclick="sendAction('enter')">↵ Enter</button>
-            <button type="button" class="chip" onclick="sendAction('esc')">⎋ Esc</button>
+            <button type="button" class="chip" data-action="approve">✓ Approve (Y)</button>
+            <button type="button" class="chip" data-action="reject">✕ Reject (N)</button>
+            <button type="button" class="chip" data-action="enter">↵ Enter</button>
+            <button type="button" class="chip" data-action="esc">⎋ Esc</button>
         </div>
-        <form class="input-pill-box" action="javascript:void(0)" onsubmit="event.preventDefault(); sendInput();">
+        <form id="mobileInputForm" class="input-pill-box">
             <input type="text" id="userInput" class="chat-input" placeholder="Reply to agent or type command..." enterkeyhint="send" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
             <button type="submit" class="btn-send-round" title="Send">↑</button>
         </form>
@@ -406,15 +413,12 @@ const mobileTemplate = `<!DOCTYPE html>
         </div>
     </div>
 
-<script>
-    // Extract and preserve token across sessions
-    const urlParams = new URLSearchParams(window.location.search);
-    let sessionToken = urlParams.get('token');
-    if (sessionToken) {
-        try { localStorage.setItem('guaita_session_token', sessionToken); } catch(e){}
-    } else {
-        try { sessionToken = localStorage.getItem('guaita_session_token') || ''; } catch(e){}
+<script nonce="%s">
+    // Strip any leftover token query param from browser history; auth relies on HttpOnly cookie.
+    if (window.location.search.includes('token=')) {
+        try { window.history.replaceState({}, document.title, window.location.pathname); } catch(e){}
     }
+    try { localStorage.removeItem('guaita_session_token'); } catch(e){}
 
     let ws;
     let reconnectInterval = 1000;
@@ -423,7 +427,15 @@ const mobileTemplate = `<!DOCTYPE html>
     const rawTerminal = document.getElementById('rawTerminalView');
     const approvalCard = document.getElementById('approvalCard');
     const chatContainer = document.getElementById('chatView');
+    const agentStatusRow = document.getElementById('agentStatusRow');
+    const agentTimeEl = document.getElementById('agentTime');
     let wasWaiting = false;
+    let lastOutput = '';
+    let moveAgentAfterUser = false;
+
+    function nowTimeStr() {
+        return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
 
     // Viewport handling for iOS Virtual Keyboard
     if (window.visualViewport) {
@@ -461,11 +473,12 @@ const mobileTemplate = `<!DOCTYPE html>
         row.innerHTML = ` + "`" + `
             <div class="msg-avatar user">👤</div>
             <div class="msg-content">
-                <div style="font-size: 0.7rem; color: #94a3b8; margin-bottom: 2px;">YOU</div>
+                <div style="font-size: 0.7rem; color: #94a3b8; margin-bottom: 2px;">YOU • ${nowTimeStr()}</div>
                 <div>${escapeHTML(text)}</div>
             </div>
         ` + "`" + `;
         chatContainer.appendChild(row);
+        moveAgentAfterUser = true;
         chatContainer.scrollTop = chatContainer.scrollHeight;
     }
 
@@ -475,8 +488,7 @@ const mobileTemplate = `<!DOCTYPE html>
 
     function connect() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const tokenQuery = sessionToken ? '?token=' + encodeURIComponent(sessionToken) : '';
-        ws = new WebSocket(` + "`" + `${protocol}//${location.host}/ws${tokenQuery}` + "`" + `);
+        ws = new WebSocket(` + "`" + `${protocol}//${location.host}/ws` + "`" + `);
 
         ws.onopen = () => {
             connStatus.style.color = 'var(--success)';
@@ -487,7 +499,12 @@ const mobileTemplate = `<!DOCTYPE html>
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                const outputChanged = data.output !== undefined && data.output !== lastOutput;
                 if (data.output !== undefined) {
+                    lastOutput = data.output;
+                    if (outputChanged && agentTimeEl) {
+                        agentTimeEl.innerText = nowTimeStr();
+                    }
                     termSnippet.innerText = data.output;
                     rawTerminal.innerText = data.output;
                     termSnippet.scrollTop = termSnippet.scrollHeight;
@@ -497,6 +514,8 @@ const mobileTemplate = `<!DOCTYPE html>
                 if (data.waiting) {
                     approvalCard.style.display = 'block';
                     if (!wasWaiting) {
+                        chatContainer.appendChild(agentStatusRow);
+                        moveAgentAfterUser = false;
                         if (navigator.vibrate) navigator.vibrate([250, 100, 250, 100, 300]);
                         wasWaiting = true;
                     }
@@ -504,6 +523,12 @@ const mobileTemplate = `<!DOCTYPE html>
                     approvalCard.style.display = 'none';
                     wasWaiting = false;
                 }
+
+                if (moveAgentAfterUser && outputChanged) {
+                    chatContainer.appendChild(agentStatusRow);
+                    moveAgentAfterUser = false;
+                }
+                chatContainer.scrollTop = chatContainer.scrollHeight;
             } catch (err) {
                 console.error("WS parse error", err);
             }
@@ -523,12 +548,10 @@ const mobileTemplate = `<!DOCTYPE html>
         if (displayLabel) {
             appendUserMessage(displayLabel);
         }
-        const tokenQuery = sessionToken ? '?token=' + encodeURIComponent(sessionToken) : '';
-        fetch('/action' + tokenQuery, {
+        fetch('/action', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Guaita-Token': sessionToken
+                'Content-Type': 'application/x-www-form-urlencoded'
             },
             body: new URLSearchParams({action: action})
         }).then(res => {
@@ -553,6 +576,25 @@ const mobileTemplate = `<!DOCTYPE html>
         dispatchAction(val, val);
         input.value = '';
         input.blur();
+    }
+
+    document.addEventListener('click', (e) => {
+        const viewBtn = e.target.closest('[data-view]');
+        if (viewBtn) {
+            switchView(viewBtn.dataset.view);
+            return;
+        }
+        const actionBtn = e.target.closest('[data-action]');
+        if (actionBtn) {
+            sendAction(actionBtn.dataset.action);
+        }
+    });
+    const mobileForm = document.getElementById('mobileInputForm');
+    if (mobileForm) {
+        mobileForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            sendInput();
+        });
     }
 
     connect();
@@ -594,17 +636,22 @@ const adminTemplate = `<!DOCTYPE html>
             min-height: 100vh;
         }
         header {
-            display: flex;
-            justify-content: space-between;
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
             align-items: center;
+            gap: 16px;
             border-bottom: 1px solid var(--surface-border);
             padding-bottom: 14px;
             margin-bottom: 20px;
         }
+        #connStatus {
+            justify-self: end;
+        }
         .header-title {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
+            flex-wrap: wrap;
         }
         h1 { font-size: 1.3rem; margin: 0; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: center; gap: 8px; }
         .badge {
@@ -664,13 +711,19 @@ const adminTemplate = `<!DOCTYPE html>
             background: #090d16;
             border: 1px solid var(--surface-border);
             border-radius: 8px;
-            padding: 8px 12px;
-            font-size: 0.78rem;
-            font-family: ui-monospace, monospace;
+            padding: 8px 10px;
+            font-size: 0.76rem;
+            font-family: ui-monospace, SFMono-Regular, monospace;
             align-items: center;
-            word-break: break-all;
         }
-        .url-field span { flex: 1; color: #cbd5e1; }
+        .url-field span {
+            flex: 1;
+            min-width: 0;
+            color: #cbd5e1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         .btn-copy {
             background: var(--accent);
             color: #0b0f19;
@@ -827,9 +880,54 @@ const adminTemplate = `<!DOCTYPE html>
         .btn-act-app { background: var(--success); color: #fff; }
         .btn-act-rej { background: var(--danger); color: #fff; }
         .chat-footer {
-            padding: 14px 18px;
+            padding: 14px 18px 16px 18px;
             border-top: 1px solid var(--surface-border);
-            background: rgba(0,0,0,0.2);
+            background: rgba(0,0,0,0.22);
+        }
+        .quick-actions {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .btn-quick {
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            color: var(--text);
+            padding: 7px 14px;
+            border-radius: 99px;
+            font-size: 0.76rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+        .btn-quick:hover {
+            background: var(--surface-hover);
+            border-color: var(--accent);
+            transform: translateY(-1px);
+        }
+        .btn-quick-approve {
+            background: rgba(16, 185, 129, 0.12);
+            border-color: rgba(16, 185, 129, 0.35);
+            color: #34d399;
+        }
+        .btn-quick-approve:hover {
+            background: rgba(16, 185, 129, 0.22);
+            border-color: var(--success);
+        }
+        .btn-quick-reject {
+            background: rgba(239, 68, 68, 0.12);
+            border-color: rgba(239, 68, 68, 0.35);
+            color: #f87171;
+        }
+        .btn-quick-reject:hover {
+            background: rgba(239, 68, 68, 0.22);
+            border-color: var(--danger);
         }
         .chat-input-pill {
             display: flex;
@@ -839,6 +937,9 @@ const adminTemplate = `<!DOCTYPE html>
             border-radius: 26px;
             padding: 4px 6px 4px 16px;
             gap: 8px;
+            max-width: 820px;
+            margin: 0 auto;
+            width: 100%%;
             transition: border-color 0.2s;
         }
         .chat-input-pill:focus-within { border-color: var(--accent); }
@@ -905,6 +1006,56 @@ const adminTemplate = `<!DOCTYPE html>
             color: var(--text);
             margin-bottom: 4px;
         }
+        .top-nav {
+            display: inline-flex;
+            background: var(--surface);
+            border: 1px solid var(--surface-border);
+            border-radius: 10px;
+            padding: 4px;
+            gap: 4px;
+        }
+        .nav-tab {
+            background: transparent;
+            border: none;
+            color: var(--text-dim);
+            padding: 7px 14px;
+            border-radius: 7px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.15s ease;
+        }
+        .nav-tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
+        .nav-tab.active {
+            background: var(--accent-dim);
+            color: var(--accent);
+            box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.3);
+        }
+        .section-pane {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+            gap: 18px;
+        }
+        .section-pane.active { display: flex; }
+        .clients-grid {
+            display: grid;
+            grid-template-columns: 1.5fr 1fr;
+            gap: 18px;
+        }
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+            gap: 18px;
+        }
+        @media (max-width: 960px) {
+            header { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+            #connStatus { justify-self: auto; }
+            .clients-grid { grid-template-columns: 1fr; }
+        }
     </style>
 </head>
 <body>
@@ -914,70 +1065,92 @@ const adminTemplate = `<!DOCTYPE html>
             <span class="badge badge-admin">LOCALHOST ADMIN</span>
             <span class="badge">LAN: %s:%s</span>
         </div>
+        <nav class="top-nav" aria-label="Primary sections">
+            <button id="navSentinel" class="nav-tab active" data-section="sentinel">🤖 Sentinel</button>
+            <button id="navClients" class="nav-tab" data-section="clients">👥 Clients (<span id="clientCountTab">0</span>)</button>
+            <button id="navSettings" class="nav-tab" data-section="settings">⚙️ Settings</button>
+        </nav>
         <div id="connStatus" style="font-size: 0.8rem; color: var(--success); font-weight: 600;">● Live Herdr Link</div>
     </header>
 
-    <div class="layout-grid">
-        <div>
-            <!-- Mobile Pairing QR Card -->
-            <div class="card">
-                <div class="card-header">
-                    <span>📱 Mobile Pairing</span>
-                    <button class="btn-regen" onclick="regenerateToken()">Regenerate Token</button>
-                </div>
-                <div class="qr-box">
-                    <img id="qrImg" src="data:image/png;base64,%s" alt="Guaita Mobile Pairing QR">
-                </div>
-                <div class="url-field">
-                    <span id="pairingURL">%s</span>
-                    <button class="btn-copy" onclick="copyURL()">Copy Link</button>
-                </div>
-                <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 10px; line-height: 1.4;">
-                    Scan with your mobile camera. Sessions persist for <strong>%d days</strong> across Wi-Fi and UniFi Teleport VPN.
+    <section id="sectionSentinel" class="section-pane active">
+        <div class="layout-grid">
+            <div>
+                <!-- Mobile Pairing QR Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <span>📱 Mobile Pairing</span>
+                        <button class="btn-regen" data-fn="regenerateToken">Regenerate Token</button>
+                    </div>
+                    <div class="qr-box">
+                        <img id="qrImg" src="data:image/png;base64,%s" alt="Guaita Mobile Pairing QR">
+                    </div>
+                    <div class="url-field">
+                        <span id="pairingURL">%s</span>
+                        <button class="btn-copy" data-fn="copyURL">Copy Link</button>
+                    </div>
+                    <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 10px; line-height: 1.4;">
+                        Scan with your mobile camera. Sessions persist for <strong>%d days</strong> across Wi-Fi and UniFi Teleport VPN.
+                    </div>
                 </div>
             </div>
 
-            <!-- iOS Notification Channels Card -->
-            <div class="card">
-                <div class="card-header">
-                    <span>🔔 iOS Push Channels</span>
-                </div>
-                <div class="notify-channel">
-                    <div class="channel-title">
-                        <span>⭐️ ntfy.sh (Interactive Push)</span>
-                        <span style="color: var(--success); font-size: 0.7rem;">Active</span>
+            <!-- Agent Sentinel & Conversation Panel -->
+            <div class="chat-panel">
+                <div class="chat-header">
+                    <div class="agent-info">
+                        <div class="avatar">🤖</div>
+                        <div>
+                            <div style="font-weight: 600; font-size: 0.95rem;">Herdr Agent Sentinel</div>
+                            <div id="paneBadge" style="font-size: 0.72rem; color: var(--accent);">Target: Auto-detecting pane...</div>
+                        </div>
                     </div>
-                    <div style="display: flex; gap: 10px; align-items: center; margin-top: 6px;">
-                        <img src="data:image/png;base64,%s" style="width: 64px; height: 64px; background: #fff; padding: 4px; border-radius: 6px;" alt="ntfy QR">
-                        <div style="flex: 1; font-size: 0.7rem; color: var(--text-dim);">
-                            <div>Topic: <strong>%s</strong></div>
-                            <div style="margin-top: 4px;"><a href="%s" target="_blank" style="color: var(--accent); text-decoration: none;">Open in ntfy app →</a></div>
+                    <div class="view-pill">
+                        <button id="btnAdminChat" class="btn-view-toggle active" data-admin-view="chat">💬 Chat</button>
+                        <button id="btnAdminTerm" class="btn-view-toggle" data-admin-view="term">💻 Raw</button>
+                    </div>
+                </div>
+
+            <div id="adminChatBody" class="chat-body">
+                <div id="adminAgentRow" class="msg-row agent">
+                    <div style="font-size: 20px;">🤖</div>
+                    <div class="bubble" style="width: 100%%;">
+                        <div style="font-size: 0.75rem; color: var(--accent); font-weight: 600; margin-bottom: 4px;">AGENT EXECUTION STREAM <span id="adminAgentTime" style="color: var(--text-dim); font-weight: 400; margin-left: 6px;"></span></div>
+                        <div id="agentTextAdmin">Monitoring active Herdr session. Output from current pane:</div>
+                        <div id="terminalSnippetAdmin" class="terminal-viewport">Awaiting Herdr output...</div>
+                        
+                        <div id="approvalBannerAdmin" class="approval-banner" style="display: none;">
+                            <div style="font-size: 0.82rem; font-weight: 700; color: var(--danger); text-transform: uppercase;">⚠️ Human Approval Required</div>
+                            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 4px;">Agent is waiting for your confirmation:</div>
+                            <div class="action-grid">
+                                <button class="btn-act btn-act-app" data-action="approve">✓ APPROVE (Y)</button>
+                                <button class="btn-act btn-act-rej" data-action="reject">✕ REJECT (N)</button>
+                            </div>
                         </div>
                     </div>
                 </div>
-
-                <div class="notify-channel">
-                    <div class="channel-title">
-                        <span>💬 Telegram Bot</span>
-                        <span style="color: var(--accent); font-size: 0.7rem;">%s</span>
-                    </div>
-                    <div style="font-size: 0.7rem; color: var(--text-dim);">
-                        Sends interactive inline buttons directly to your iPhone and Apple Watch.
-                    </div>
-                </div>
-
-                <div class="notify-channel">
-                    <div class="channel-title">
-                        <span>📱 Web Push PWA</span>
-                        <span style="color: var(--text-dim); font-size: 0.7rem;">iOS 16.4+</span>
-                    </div>
-                    <div style="font-size: 0.7rem; color: var(--text-dim);">
-                        Add Guaita to Home Screen on Safari to enable APNs web notifications.
-                    </div>
-                </div>
             </div>
 
-            <!-- Active Clients Telemetry Card -->
+            <div id="adminRawBody" class="terminal-viewport" style="display: none; height: 100%%; margin: 0; border: none; border-radius: 0;"></div>
+
+            <div class="chat-footer">
+                <div class="quick-actions">
+                    <button class="btn-quick btn-quick-approve" data-action="approve">✓ Approve (Y)</button>
+                    <button class="btn-quick btn-quick-reject" data-action="reject">✕ Reject (N)</button>
+                    <button class="btn-quick" data-action="enter">↵ Enter</button>
+                    <button class="btn-quick" data-action="esc">⎋ Esc</button>
+                </div>
+                <div class="chat-input-pill">
+                    <input type="text" id="adminInput" class="txt-chat" placeholder="Reply to agent or send instruction...">
+                    <button class="btn-arrow-send" data-fn="sendAdminInput" title="Send">↑</button>
+                </div>
+            </div>
+        </div>
+        </div>
+    </section>
+
+    <section id="sectionClients" class="section-pane">
+        <div class="clients-grid">
             <div class="card" style="margin-bottom: 0;">
                 <div class="card-header">
                     <span>👥 Connected Clients (<span id="clientCount">0</span>)</span>
@@ -997,62 +1170,99 @@ const adminTemplate = `<!DOCTYPE html>
                     </table>
                 </div>
             </div>
-        </div>
 
-        <!-- ChatGPT-style Agent Sentinel & Conversation Card -->
-        <div class="chat-panel">
-            <div class="chat-header">
-                <div class="agent-info">
-                    <div class="avatar">🤖</div>
-                    <div>
-                        <div style="font-weight: 600; font-size: 0.95rem;">Herdr Agent Sentinel</div>
-                        <div id="paneBadge" style="font-size: 0.72rem; color: var(--accent);">Target: Auto-detecting pane...</div>
-                    </div>
+            <div class="card" style="margin-bottom: 0;">
+                <div class="card-header">
+                    <span>🚫 Banned IPs (<span id="bannedCount">0</span>)</span>
                 </div>
-                <div class="view-pill">
-                    <button id="btnAdminChat" class="btn-view-toggle active" onclick="switchAdminView('chat')">💬 Chat</button>
-                    <button id="btnAdminTerm" class="btn-view-toggle" onclick="switchAdminView('term')">💻 Raw</button>
-                </div>
-            </div>
-
-            <div id="adminChatBody" class="chat-body">
-                <div class="msg-row agent">
-                    <div style="font-size: 20px;">🤖</div>
-                    <div class="bubble" style="width: 100%%;">
-                        <div style="font-size: 0.75rem; color: var(--accent); font-weight: 600; margin-bottom: 4px;">AGENT EXECUTION STREAM</div>
-                        <div id="agentTextAdmin">Monitoring active Herdr session. Output from current pane:</div>
-                        <div id="terminalSnippetAdmin" class="terminal-viewport">Awaiting Herdr output...</div>
-                        
-                        <div id="approvalBannerAdmin" class="approval-banner" style="display: none;">
-                            <div style="font-size: 0.82rem; font-weight: 700; color: var(--danger); text-transform: uppercase;">⚠️ Human Approval Required</div>
-                            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 4px;">Agent is waiting for your confirmation:</div>
-                            <div class="action-grid">
-                                <button class="btn-act btn-act-app" onclick="sendAction('approve')">✓ APPROVE (Y)</button>
-                                <button class="btn-act btn-act-rej" onclick="sendAction('reject')">✕ REJECT (N)</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="adminRawBody" class="terminal-viewport" style="display: none; height: 100%%; margin: 0; border: none; border-radius: 0;"></div>
-
-            <div class="chat-footer">
-                <div style="display: flex; gap: 8px; margin-bottom: 8px;">
-                    <button class="btn-view-toggle" onclick="sendAction('approve')">✓ Approve (Y)</button>
-                    <button class="btn-view-toggle" onclick="sendAction('reject')">✕ Reject (N)</button>
-                    <button class="btn-view-toggle" onclick="sendAction('enter')">↵ Enter</button>
-                    <button class="btn-view-toggle" onclick="sendAction('esc')">⎋ Esc</button>
-                </div>
-                <div class="chat-input-pill">
-                    <input type="text" id="adminInput" class="txt-chat" placeholder="Reply to agent or send instruction..." onkeydown="if(event.key==='Enter') sendAdminInput()">
-                    <button class="btn-arrow-send" onclick="sendAdminInput()" title="Send">↑</button>
-                </div>
+                <div id="bannedList" style="font-size: 0.78rem; color: var(--text-dim);">No banned IPs</div>
             </div>
         </div>
-    </div>
 
-<script>
+        <div class="card" style="margin-bottom: 0;">
+            <div class="card-header">
+                <span>📜 Security Audit Log</span>
+            </div>
+            <div class="table-wrap" style="max-height: 420px; overflow-y: auto;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>IP</th>
+                            <th>Event</th>
+                        </tr>
+                    </thead>
+                    <tbody id="auditTable">
+                        <tr><td colspan="3" style="text-align: center; color: var(--text-dim);">No events yet</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+
+    <section id="sectionSettings" class="section-pane">
+        <div class="settings-grid">
+            <div class="card" style="margin-bottom: 0;">
+                <div class="card-header">
+                    <span>⭐️ ntfy.sh (Interactive Push)</span>
+                    <span style="color: var(--success); font-size: 0.75rem;">Active</span>
+                </div>
+                <div style="display: flex; gap: 14px; align-items: center;">
+                    <img src="data:image/png;base64,%s" style="width: 84px; height: 84px; background: #fff; padding: 6px; border-radius: 8px;" alt="ntfy QR">
+                    <div style="flex: 1; font-size: 0.8rem; color: var(--text-dim); line-height: 1.5;">
+                        <div>Topic: <strong style="color: var(--text);">%s</strong></div>
+                        <div style="margin-top: 6px;"><a href="%s" target="_blank" style="color: var(--accent); text-decoration: none;">Open in ntfy app →</a></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 0;">
+                <div class="card-header">
+                    <span>💬 Telegram Bot</span>
+                    <span id="tgStatusBadge" style="color: var(--accent); font-size: 0.75rem;">%s</span>
+                </div>
+                <div style="font-size: 0.78rem; color: var(--text-dim); margin-bottom: 12px;">
+                    Sends interactive inline approval buttons directly to your iPhone and Apple Watch. Saved in <code>~/.config/guaita/config.json</code>.
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <input id="tgTokenInput" type="password" placeholder="Bot Token (@BotFather)" autocomplete="off" style="background: var(--bg); border: 1px solid var(--surface-border); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 0.8rem; outline: none;" />
+                    <input id="tgChatIdInput" type="text" placeholder="Chat ID (e.g. 987654321)" autocomplete="off" style="background: var(--bg); border: 1px solid var(--surface-border); color: var(--text); border-radius: 8px; padding: 8px 10px; font-size: 0.8rem; outline: none;" />
+                    <div style="display: flex; gap: 8px; margin-top: 4px;">
+                        <button class="btn-small" data-fn="saveTelegramConfig" style="flex: 1; padding: 8px;">Save &amp; Enable</button>
+                        <button class="btn-small" data-fn="disableTelegramConfig" style="color: var(--danger); padding: 8px 14px;">Disable</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 0;">
+                <div class="card-header">
+                    <span>📱 Web Push PWA</span>
+                    <span style="color: var(--text-dim); font-size: 0.75rem;">iOS 16.4+</span>
+                </div>
+                <div style="font-size: 0.78rem; color: var(--text-dim); line-height: 1.5;">
+                    Add Guaita to Home Screen on iOS Safari after pairing to enable native APNs web notifications and standalone full-screen mode.
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 0;">
+                <div class="card-header">
+                    <span>🔒 Session &amp; Security Policy</span>
+                    <span style="color: var(--success); font-size: 0.75rem;">Hardened</span>
+                </div>
+                <div style="font-size: 0.78rem; color: var(--text-dim); line-height: 1.6;">
+                    <div>• One-time pairing token exchanged for a 256-bit <code>HttpOnly</code> session cookie.</div>
+                    <div>• Single active remote session enforced; older mobile sessions are auto-revoked.</div>
+                    <div>• Admin controls restricted strictly to direct loopback connections.</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+<script nonce="%s">
+    // Strip any leftover admin_token query param from browser history; auth relies on HttpOnly cookie.
+    if (window.location.search.includes('admin_token=')) {
+        try { window.history.replaceState({}, document.title, window.location.pathname); } catch(e){}
+    }
     let ws;
     let reconnectInterval = 1000;
     const connStatus = document.getElementById('connStatus');
@@ -1062,20 +1272,32 @@ const adminTemplate = `<!DOCTYPE html>
     const approvalBanner = document.getElementById('approvalBannerAdmin');
     const clientsTable = document.getElementById('clientsTable');
     const clientCount = document.getElementById('clientCount');
+    const clientCountTab = document.getElementById('clientCountTab');
     const chatBody = document.getElementById('adminChatBody');
+    const adminAgentRow = document.getElementById('adminAgentRow');
+    const adminAgentTimeEl = document.getElementById('adminAgentTime');
+    let adminLastOutput = '';
+    let adminWasWaiting = false;
+    let adminMoveAgentAfterUser = false;
+
+    function nowTimeStr() {
+        return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function switchAdminSection(section) {
+        document.getElementById('sectionSentinel').classList.toggle('active', section === 'sentinel');
+        document.getElementById('sectionClients').classList.toggle('active', section === 'clients');
+        document.getElementById('sectionSettings').classList.toggle('active', section === 'settings');
+        document.getElementById('navSentinel').classList.toggle('active', section === 'sentinel');
+        document.getElementById('navClients').classList.toggle('active', section === 'clients');
+        document.getElementById('navSettings').classList.toggle('active', section === 'settings');
+    }
 
     function switchAdminView(mode) {
-        if (mode === 'chat') {
-            chatBody.style.display = 'flex';
-            rawBodyAdmin.style.display = 'none';
-            document.getElementById('btnAdminChat').classList.add('active');
-            document.getElementById('btnAdminTerm').classList.remove('active');
-        } else {
-            chatBody.style.display = 'none';
-            rawBodyAdmin.style.display = 'block';
-            document.getElementById('btnAdminTerm').classList.add('active');
-            document.getElementById('btnAdminChat').classList.remove('active');
-        }
+        chatBody.style.display = mode === 'chat' ? 'flex' : 'none';
+        rawBodyAdmin.style.display = mode === 'term' ? 'block' : 'none';
+        document.getElementById('btnAdminChat').classList.toggle('active', mode === 'chat');
+        document.getElementById('btnAdminTerm').classList.toggle('active', mode === 'term');
     }
 
     function appendUserMessage(text) {
@@ -1084,11 +1306,12 @@ const adminTemplate = `<!DOCTYPE html>
         row.innerHTML = ` + "`" + `
             <div style="font-size: 18px;">👤</div>
             <div class="bubble">
-                <div style="font-size: 0.7rem; color: #94a3b8; margin-bottom: 2px;">YOU</div>
+                <div style="font-size: 0.7rem; color: #94a3b8; margin-bottom: 2px;">YOU • ${nowTimeStr()}</div>
                 <div>${escapeHTML(text)}</div>
             </div>
         ` + "`" + `;
         chatBody.appendChild(row);
+        adminMoveAgentAfterUser = true;
         chatBody.scrollTop = chatBody.scrollHeight;
     }
 
@@ -1109,7 +1332,12 @@ const adminTemplate = `<!DOCTYPE html>
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
+                const outputChanged = data.output !== undefined && data.output !== adminLastOutput;
                 if (data.output !== undefined) {
+                    adminLastOutput = data.output;
+                    if (outputChanged && adminAgentTimeEl) {
+                        adminAgentTimeEl.innerText = nowTimeStr();
+                    }
                     termSnippetAdmin.innerText = data.output;
                     rawBodyAdmin.innerText = data.output;
                     termSnippetAdmin.scrollTop = termSnippetAdmin.scrollHeight;
@@ -1122,12 +1350,38 @@ const adminTemplate = `<!DOCTYPE html>
 
                 if (data.waiting) {
                     approvalBanner.style.display = 'block';
+                    if (!adminWasWaiting) {
+                        chatBody.appendChild(adminAgentRow);
+                        adminMoveAgentAfterUser = false;
+                        adminWasWaiting = true;
+                    }
                 } else {
                     approvalBanner.style.display = 'none';
+                    adminWasWaiting = false;
                 }
+
+                if (adminMoveAgentAfterUser && outputChanged) {
+                    chatBody.appendChild(adminAgentRow);
+                    adminMoveAgentAfterUser = false;
+                }
+                chatBody.scrollTop = chatBody.scrollHeight;
 
                 if (data.clients) {
                     renderClients(data.clients);
+                }
+                if (data.banned_ips !== undefined) {
+                    renderBanned(data.banned_ips);
+                }
+                if (data.audit_log !== undefined) {
+                    renderAudit(data.audit_log);
+                }
+                if (data.pairing_url && data.qr_base64) {
+                    const urlEl = document.getElementById('pairingURL');
+                    const qrEl = document.getElementById('qrImg');
+                    if (urlEl && urlEl.innerText !== data.pairing_url) {
+                        urlEl.innerText = data.pairing_url;
+                        qrEl.src = 'data:image/png;base64,' + data.qr_base64;
+                    }
                 }
             } catch (err) {
                 console.error("WS error", err);
@@ -1144,24 +1398,67 @@ const adminTemplate = `<!DOCTYPE html>
         ws.onerror = () => { ws.close(); };
     }
 
+    function escapeAdminHTML(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     function renderClients(clients) {
         clientCount.innerText = clients.length;
+        if (clientCountTab) clientCountTab.innerText = clients.length;
         if (!clients || clients.length === 0) {
             clientsTable.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-dim);">No active clients</td></tr>';
             return;
         }
-        clientsTable.innerHTML = clients.map(c => ` + "`" + `
-            <tr>
-                <td>
-                    <div><strong>${c.is_localhost ? 'Localhost (Admin)' : c.remote_addr}</strong></div>
-                    <div style="font-size: 0.7rem; color: var(--text-dim); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${c.user_agent}</div>
-                </td>
-                <td style="color: var(--text-dim); font-size: 0.72rem;">${formatTime(c.connected_at)}</td>
-                <td>
-                    ${c.is_localhost ? '<span style="color: var(--success); font-size: 0.75rem;">Self</span>' : ('<button class="btn-disconnect" onclick="disconnectClient(\'' + c.id + '\')">Kick</button>')}
-                </td>
-            </tr>
-        ` + "`" + `).join('');
+        clientsTable.innerHTML = '';
+        clients.forEach(c => {
+            const tr = document.createElement('tr');
+            const tdInfo = document.createElement('td');
+            const addrDiv = document.createElement('div');
+            const strong = document.createElement('strong');
+            strong.textContent = c.is_localhost ? 'Localhost (Admin)' : c.remote_addr;
+            addrDiv.appendChild(strong);
+
+            const uaDiv = document.createElement('div');
+            uaDiv.style.cssText = 'font-size: 0.7rem; color: var(--text-dim); max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+            uaDiv.textContent = c.user_agent || '';
+            tdInfo.appendChild(addrDiv);
+            tdInfo.appendChild(uaDiv);
+
+            const tdTime = document.createElement('td');
+            tdTime.style.cssText = 'color: var(--text-dim); font-size: 0.72rem;';
+            tdTime.textContent = formatTime(c.connected_at);
+
+            const tdAction = document.createElement('td');
+            if (c.is_localhost) {
+                const selfSpan = document.createElement('span');
+                selfSpan.style.cssText = 'color: var(--success); font-size: 0.75rem;';
+                selfSpan.textContent = 'Self';
+                tdAction.appendChild(selfSpan);
+            } else {
+                const wrap = document.createElement('div');
+                wrap.style.cssText = 'display: flex; gap: 4px;';
+                const btnKick = document.createElement('button');
+                btnKick.className = 'btn-disconnect';
+                btnKick.textContent = 'Kick';
+                btnKick.addEventListener('click', () => disconnectClient(c.id));
+
+                const btnBan = document.createElement('button');
+                btnBan.className = 'btn-disconnect';
+                btnBan.style.background = '#7f1d1d';
+                btnBan.textContent = 'Ban';
+                btnBan.addEventListener('click', () => banClient(c.id));
+
+                wrap.appendChild(btnKick);
+                wrap.appendChild(btnBan);
+                tdAction.appendChild(wrap);
+            }
+
+            tr.appendChild(tdInfo);
+            tr.appendChild(tdTime);
+            tr.appendChild(tdAction);
+            clientsTable.appendChild(tr);
+        });
     }
 
     function formatTime(isoString) {
@@ -1178,6 +1475,83 @@ const adminTemplate = `<!DOCTYPE html>
         });
     }
 
+    function banClient(id) {
+        if (!confirm('Ban this client IP and disconnect immediately?')) return;
+        fetch('/api/clients/ban', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({id: id})
+        });
+    }
+
+    function unbanIP(ip) {
+        fetch('/api/clients/unban', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ip: ip})
+        });
+    }
+
+    function renderBanned(ips) {
+        const list = document.getElementById('bannedList');
+        const count = document.getElementById('bannedCount');
+        if (!list || !count) return;
+        count.innerText = ips.length;
+        if (!ips || ips.length === 0) {
+            list.textContent = 'No banned IPs';
+            return;
+        }
+        list.innerHTML = '';
+        ips.forEach(ip => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border);';
+            const span = document.createElement('span');
+            span.textContent = ip;
+            const btn = document.createElement('button');
+            btn.className = 'btn-small';
+            btn.textContent = 'Unban';
+            btn.addEventListener('click', () => unbanIP(ip));
+            row.appendChild(span);
+            row.appendChild(btn);
+            list.appendChild(row);
+        });
+    }
+
+    function renderAudit(entries) {
+        const table = document.getElementById('auditTable');
+        if (!table) return;
+        if (!entries || entries.length === 0) {
+            table.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-dim);">No events yet</td></tr>';
+            return;
+        }
+        table.innerHTML = '';
+        entries.slice(0, 50).forEach(e => {
+            const tr = document.createElement('tr');
+            const tdTime = document.createElement('td');
+            tdTime.style.cssText = 'color: var(--text-dim); font-size: 0.68rem; white-space: nowrap;';
+            tdTime.textContent = formatTime(e.timestamp);
+
+            const tdIP = document.createElement('td');
+            tdIP.style.cssText = 'font-size: 0.7rem;';
+            tdIP.textContent = e.ip || '-';
+
+            const tdEvt = document.createElement('td');
+            tdEvt.style.cssText = 'font-size: 0.7rem;';
+            const evtStrong = document.createElement('strong');
+            evtStrong.textContent = e.event + ' ';
+            const detSpan = document.createElement('span');
+            detSpan.style.color = 'var(--text-dim)';
+            detSpan.textContent = e.detail || '';
+            tdEvt.appendChild(evtStrong);
+            tdEvt.appendChild(detSpan);
+
+            tr.appendChild(tdTime);
+            tr.appendChild(tdIP);
+            tr.appendChild(tdEvt);
+            table.appendChild(tr);
+        });
+    }
+
     function regenerateToken() {
         if (!confirm("Regenerate session token? All active remote clients will be disconnected.")) return;
         fetch('/api/token/regenerate', { method: 'POST' })
@@ -1186,6 +1560,40 @@ const adminTemplate = `<!DOCTYPE html>
                 document.getElementById('pairingURL').innerText = data.url;
                 document.getElementById('qrImg').src = 'data:image/png;base64,' + data.qr_base64;
             });
+    }
+
+    function saveTelegramConfig() {
+        const botToken = document.getElementById('tgTokenInput').value.trim();
+        const chatId = document.getElementById('tgChatIdInput').value.trim();
+        if (!botToken || !chatId) {
+            alert('Please enter both Bot Token and Chat ID.');
+            return;
+        }
+        fetch('/api/telegram/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bot_token: botToken, chat_id: chatId })
+        }).then(res => {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        }).then(data => {
+            document.getElementById('tgStatusBadge').innerText = data.active ? 'Active' : 'Not configured';
+            document.getElementById('tgTokenInput').value = '';
+        }).catch(err => {
+            alert('Failed to save Telegram config: ' + err.message);
+        });
+    }
+
+    function disableTelegramConfig() {
+        fetch('/api/telegram/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ disable: true })
+        }).then(res => res.json()).then(() => {
+            document.getElementById('tgStatusBadge').innerText = 'Not configured';
+            document.getElementById('tgTokenInput').value = '';
+            document.getElementById('tgChatIdInput').value = '';
+        });
     }
 
     function sendAction(action) {
@@ -1212,6 +1620,36 @@ const adminTemplate = `<!DOCTYPE html>
             const btn = document.querySelector('.btn-copy');
             btn.innerText = 'Copied!';
             setTimeout(() => { btn.innerText = 'Copy Link'; }, 2000);
+        });
+    }
+
+    document.addEventListener('click', (e) => {
+        const secBtn = e.target.closest('[data-section]');
+        if (secBtn) {
+            switchAdminSection(secBtn.dataset.section);
+            return;
+        }
+        const viewBtn = e.target.closest('[data-admin-view]');
+        if (viewBtn) {
+            switchAdminView(viewBtn.dataset.adminView);
+            return;
+        }
+        const actionBtn = e.target.closest('[data-action]');
+        if (actionBtn) {
+            sendAction(actionBtn.dataset.action);
+            return;
+        }
+        const fnBtn = e.target.closest('[data-fn]');
+        if (fnBtn) {
+            const fnMap = { regenerateToken, copyURL, sendAdminInput, saveTelegramConfig, disableTelegramConfig };
+            const fn = fnMap[fnBtn.dataset.fn];
+            if (fn) fn();
+        }
+    });
+    const adminInputEl = document.getElementById('adminInput');
+    if (adminInputEl) {
+        adminInputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') sendAdminInput();
         });
     }
 

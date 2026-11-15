@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/hex"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -33,11 +34,15 @@ func TestGetLocalIP(t *testing.T) {
 }
 
 func TestRenderQR(t *testing.T) {
-	qr, err := renderQR("http://192.168.1.50:8085/?token=testtoken")
+	qr, err := renderQR("https://192.168.10.189:8085/?token=6f9800487180f533051a70ef5670f80b")
 	if err != nil {
 		t.Fatalf("unexpected error rendering QR: %v", err)
 	}
 	if len(qr) == 0 {
 		t.Errorf("expected non-empty QR output")
+	}
+	lines := strings.Count(qr, "\n")
+	if lines > 22 {
+		t.Errorf("expected compact terminal QR (<=22 lines), got %d lines", lines)
 	}
 }

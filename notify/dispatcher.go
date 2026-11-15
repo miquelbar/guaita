@@ -42,6 +42,32 @@ func (d *Dispatcher) Register(n Notifier) {
 	d.notifiers = append(d.notifiers, n)
 }
 
+// RegisterOrReplace adds a notifier or replaces an existing one with the same name.
+func (d *Dispatcher) RegisterOrReplace(n Notifier) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for i, existing := range d.notifiers {
+		if existing.Name() == n.Name() {
+			d.notifiers[i] = n
+			return
+		}
+	}
+	d.notifiers = append(d.notifiers, n)
+}
+
+// Unregister removes any notifier matching the given name.
+func (d *Dispatcher) Unregister(name string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	filtered := d.notifiers[:0]
+	for _, existing := range d.notifiers {
+		if existing.Name() != name {
+			filtered = append(filtered, existing)
+		}
+	}
+	d.notifiers = filtered
+}
+
 // DispatchOnWaiting dispatches notifications only on transition from non-waiting to waiting.
 func (d *Dispatcher) DispatchOnWaiting(isWaiting bool, event NotificationEvent) {
 	d.mu.Lock()

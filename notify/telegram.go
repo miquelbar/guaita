@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"html"
+	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -54,25 +57,29 @@ func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 		return nil
 	}
 
-	messageText := fmt.Sprintf("🛡️ *Guaita Sentinel Alert*\n\nAgent in pane `%s` is paused awaiting human approval:\n\n```\n%s\n```",
-		event.PaneID,
-		event.Body,
+	body := event.Body
+	if len(body) > 3000 {
+		body = body[len(body)-3000:]
+	}
+
+	messageText := fmt.Sprintf("🛡️ <b>Guaita Sentinel Alert</b>\n\nAgent in pane <code>%s</code> is paused awaiting human approval:\n\n<pre>%s</pre>",
+		html.EscapeString(event.PaneID),
+		html.EscapeString(body),
 	)
+
+	keyboard := [][]map[string]string{
+		{
+			{"text": "✓ APPROVE (Y)", "callback_data": "approve"},
+			{"text": "✕ REJECT (N)", "callback_data": "reject"},
+		},
+	}
 
 	payload := map[string]interface{}{
 		"chat_id":    t.ChatID,
 		"text":       messageText,
-		"parse_mode": "Markdown",
+		"parse_mode": "HTML",
 		"reply_markup": map[string]interface{}{
-			"inline_keyboard": [][]map[string]string{
-				{
-					{"text": "✓ APPROVE (Y)", "callback_data": "approve"},
-					{"text": "✕ REJECT (N)", "callback_data": "reject"},
-				},
-				{
-					{"text": "📱 Open Guaita Web", "url": event.PairingURL},
-				},
-			},
+			"inline_keyboard": keyboard,
 		},
 	}
 
@@ -95,7 +102,8 @@ func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("telegram returned HTTP %d", resp.StatusCode)
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("telegram returned HTTP %d: %s", resp.StatusCode, string(errBody))
 	}
 
 	return nil
@@ -107,8 +115,14 @@ type telegramUpdate struct {
 		ID   string `json:"id"`
 		Data string `json:"data"`
 		From struct {
+			ID        int64  `json:"id"`
 			FirstName string `json:"first_name"`
 		} `json:"from"`
+		Message *struct {
+			Chat struct {
+				ID int64 `json:"id"`
+			} `json:"chat"`
+		} `json:"message"`
 	} `json:"callback_query"`
 }
 
@@ -148,7 +162,15 @@ func (t *TelegramNotifier) pollUpdates() {
 				}
 
 				if u.CallbackQuery != nil && t.onAction != nil {
+					if !t.isAuthorizedCallback(u.CallbackQuery.From.ID, u.CallbackQuery.Message) {
+						t.answerCallbackQuery(u.CallbackQuery.ID, "Unauthorized")
+						continue
+					}
 					action := u.CallbackQuery.Data
+					if action != "approve" && action != "reject" {
+						t.answerCallbackQuery(u.CallbackQuery.ID, "Unsupported action")
+						continue
+					}
 					t.onAction(action)
 					t.answerCallbackQuery(u.CallbackQuery.ID, fmt.Sprintf("Action '%s' dispatched!", action))
 				}
@@ -156,6 +178,17 @@ func (t *TelegramNotifier) pollUpdates() {
 		}
 		resp.Body.Close()
 	}
+}
+
+func (t *TelegramNotifier) isAuthorizedCallback(fromID int64, msg *struct {
+	Chat struct {
+		ID int64 `json:"id"`
+	} `json:"chat"`
+}) bool {
+	if msg != nil && strconv.FormatInt(msg.Chat.ID, 10) == t.ChatID {
+		return true
+	}
+	return strconv.FormatInt(fromID, 10) == t.ChatID
 }
 
 func (t *TelegramNotifier) answerCallbackQuery(queryID, text string) {

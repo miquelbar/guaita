@@ -76,41 +76,49 @@ func TestHandleIndex_RemoteUnauthorized(t *testing.T) {
 	}
 }
 
-func TestHandleIndex_RemoteAuthorizedWithQueryToken(t *testing.T) {
-	srv := New(Config{SessionToken: "secret123", SessionDays: 5})
-	req := httptest.NewRequest(http.MethodGet, "/?token=secret123", nil)
-	req.RemoteAddr = "192.168.1.50:54321" // remote
+func pairRemoteClient(t *testing.T, srv *Server, token string) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/?token="+token, nil)
+	req.RemoteAddr = "192.168.1.50:54321"
 	rec := httptest.NewRecorder()
-
 	srv.HandleIndex(rec, req)
-
 	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK, got %d", rec.Code)
+		t.Fatalf("expected 200 OK on pairing, got %d", rec.Code)
 	}
-
-	cookies := rec.Result().Cookies()
-	var foundCookie *http.Cookie
-	for _, c := range cookies {
+	for _, c := range rec.Result().Cookies() {
 		if c.Name == "guaita_session" {
-			foundCookie = c
-			break
+			return c
 		}
 	}
+	t.Fatalf("expected guaita_session cookie after pairing")
+	return nil
+}
 
-	if foundCookie == nil {
-		t.Fatalf("expected cookie 'guaita_session' to be set")
-	}
-	if foundCookie.Value != "secret123" {
-		t.Errorf("expected cookie value 'secret123', got %s", foundCookie.Value)
+func TestHandleIndex_RemoteAuthorizedWithQueryToken(t *testing.T) {
+	srv := New(Config{SessionToken: "secret123", SessionDays: 5})
+	foundCookie := pairRemoteClient(t, srv, "secret123")
+
+	if foundCookie.Value == "" || foundCookie.Value == "secret123" {
+		t.Errorf("expected unique opaque session cookie distinct from pairing token, got %q", foundCookie.Value)
 	}
 	if !foundCookie.HttpOnly {
 		t.Errorf("expected cookie to be HttpOnly")
 	}
-	if foundCookie.SameSite != http.SameSiteStrictMode {
-		t.Errorf("expected SameSiteStrictMode")
+	if foundCookie.SameSite != http.SameSiteLaxMode {
+		t.Errorf("expected SameSiteLaxMode")
 	}
 
-	body := rec.Body.String()
+	// Follow-up request to "/" (or reload of "/?token=secret123") with the issued cookie succeeds
+	req2 := httptest.NewRequest(http.MethodGet, "/", nil)
+	req2.RemoteAddr = "192.168.1.50:54321"
+	req2.AddCookie(foundCookie)
+	rec2 := httptest.NewRecorder()
+	srv.HandleIndex(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on follow-up request, got %d", rec2.Code)
+	}
+	body := rec2.Body.String()
 	if !strings.Contains(body, "Guaita // Mobile Sentinel") {
 		t.Errorf("expected body to contain mobile title")
 	}
@@ -121,9 +129,11 @@ func TestHandleIndex_RemoteAuthorizedWithQueryToken(t *testing.T) {
 
 func TestHandleIndex_RemoteAuthorizedWithCookie(t *testing.T) {
 	srv := New(Config{SessionToken: "secret123", SessionDays: 7})
+	cookie := pairRemoteClient(t, srv, "secret123")
+
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.50:54321" // remote
-	req.AddCookie(&http.Cookie{Name: "guaita_session", Value: "secret123"})
+	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
 
 	srv.HandleIndex(rec, req)
@@ -179,11 +189,12 @@ func TestHandleAction_RemoteAuthorizedWithHeadersAndJSON(t *testing.T) {
 		capturedAction = action
 		return nil
 	}
+	cookie := pairRemoteClient(t, srv, "secret123")
 
-	// 1. With X-Guaita-Token header and JSON body
+	// 1. With X-Guaita-Token header (using active session ID) and JSON body
 	reqJSON := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(`{"action":"reject"}`))
 	reqJSON.RemoteAddr = "192.168.1.50:54321"
-	reqJSON.Header.Set("X-Guaita-Token", "secret123")
+	reqJSON.Header.Set("X-Guaita-Token", cookie.Value)
 	recJSON := httptest.NewRecorder()
 	srv.HandleAction(recJSON, reqJSON)
 
@@ -194,10 +205,11 @@ func TestHandleAction_RemoteAuthorizedWithHeadersAndJSON(t *testing.T) {
 		t.Errorf("expected 'reject', got %s", capturedAction)
 	}
 
-	// 2. With Authorization Bearer and query action
-	reqBearer := httptest.NewRequest(http.MethodPost, "/action?action=enter", nil)
+	// 2. With Authorization Bearer and form body
+	reqBearer := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader("action=enter"))
 	reqBearer.RemoteAddr = "192.168.1.50:54321"
-	reqBearer.Header.Set("Authorization", "Bearer secret123")
+	reqBearer.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	reqBearer.Header.Set("Authorization", "Bearer "+cookie.Value)
 	recBearer := httptest.NewRecorder()
 	srv.HandleAction(recBearer, reqBearer)
 
@@ -342,7 +354,7 @@ func TestHandleWebSocket_StreamAndHub(t *testing.T) {
 		},
 	}
 
-	conn, resp, err := dialer.Dial("ws://memory/ws", nil)
+	conn, resp, err := dialer.Dial("ws://localhost/ws", nil)
 	if err != nil {
 		t.Fatalf("unexpected WS dial error: %v (resp: %v)", err, resp)
 	}
