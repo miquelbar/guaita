@@ -16,7 +16,7 @@ import (
 func generateToken() string {
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
-		log.Fatalf("Error fatal al generar token criptográfico: %v", err)
+		log.Fatalf("Fatal error generating cryptographic token: %v", err)
 	}
 	return hex.EncodeToString(bytes)
 }
@@ -42,30 +42,34 @@ func renderQR(targetURL string) (string, error) {
 }
 
 func main() {
-	port := flag.String("port", "8085", "Puerto del servidor web")
-	days := flag.Int("days", 7, "Días de validez de la sesión persistente en el móvil")
+	port := flag.String("port", "8085", "Web server port")
+	days := flag.Int("days", 7, "Persistent mobile session lifetime in days")
 	flag.Parse()
 
 	sessionToken := generateToken()
 	localIP := getLocalIP()
-	url := fmt.Sprintf("http://%s:%s/?token=%s", localIP, *port, sessionToken)
+	pairingURL := fmt.Sprintf("http://%s:%s/?token=%s", localIP, *port, sessionToken)
+	adminURL := fmt.Sprintf("http://localhost:%s/", *port)
 
-	fmt.Printf("\n🛡️ [Guaita 2026] Iniciado con persistencia de %d días.\n", *days)
-	fmt.Printf("Conexión segura: %s\n\n", url)
+	fmt.Printf("\n🛡️ [Guaita 2026] Sentinel active with %d-day session persistence.\n", *days)
+	fmt.Printf("🖥️  Localhost Admin:   %s\n", adminURL)
+	fmt.Printf("📱 Mobile Pairing URL: %s\n\n", pairingURL)
 
-	qrString, err := renderQR(url)
+	qrString, err := renderQR(pairingURL)
 	if err == nil {
 		fmt.Println(qrString)
 	} else {
-		log.Printf("Aviso: no se pudo dibujar el QR en la terminal: %v", err)
+		log.Printf("Warning: failed to render terminal QR code: %v", err)
 	}
 
 	srv := server.New(server.Config{
 		SessionToken: sessionToken,
 		SessionDays:  *days,
+		LocalIP:      localIP,
+		Port:         *port,
 	})
 
 	addr := fmt.Sprintf("0.0.0.0:%s", *port)
-	log.Printf("Guaita escuchando en %s (Control de acceso activo)", addr)
+	log.Printf("Guaita listening on %s (Access control active)", addr)
 	log.Fatal(http.ListenAndServe(addr, srv.Routes()))
 }

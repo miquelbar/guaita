@@ -98,7 +98,7 @@ func TestGetStatus_FallbackOnError(t *testing.T) {
 	if status.Waiting {
 		t.Errorf("expected waiting to be false on error")
 	}
-	if status.Output != "⚡ Herdr offline o inactivo" {
+	if status.Output != "⚡ Herdr offline or inactive" {
 		t.Errorf("unexpected fallback output: %s", status.Output)
 	}
 }
