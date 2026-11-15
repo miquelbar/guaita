@@ -1,0 +1,30 @@
+# Environment and credentials
+.env
+.env.local
+*.env
+!.env.example
+
+# Configuration overrides
+config.yaml
+config.local.yaml
+!.config.example.yaml
+
+# Build artifacts and binaries
+bin/
+dist/
+*.exe
+*.test
+*.out
+
+# Data, caches and runtime files
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
