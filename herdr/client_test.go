@@ -34,54 +34,86 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 
-	cmd := args[0]
 	subCmd := ""
 	if len(args) > 1 {
 		subCmd = args[1]
 	}
 
-	if cmd == "herdr-core" {
-		switch subCmd {
-		case "status":
-			mode := os.Getenv("TEST_HERDR_MODE")
+	mode := os.Getenv("TEST_HERDR_MODE")
+	if mode == "fail" {
+		os.Exit(1)
+	}
+
+	switch subCmd {
+	case "status":
+		fmt.Print(`{"server":{"status":"running","running":true,"socket":"/tmp/test.sock"}}`)
+	case "pane":
+		paneAction := ""
+		if len(args) > 2 {
+			paneAction = args[2]
+		}
+		switch paneAction {
+		case "list":
 			switch mode {
-			case "json_waiting":
-				fmt.Print(`{"output":"Approval required: edit file? (y/n)","waiting":true}`)
-			case "json_running":
-				fmt.Print(`{"output":"Building project...","waiting":false}`)
-			case "raw_text":
-				fmt.Print(`Running agent task 123...`)
-			case "fail":
-				os.Exit(1)
+			case "blocked":
+				fmt.Print(`{"result":{"panes":[{"pane_id":"w1:p1","agent_status":"blocked","focused":true,"terminal_title":"agent-pane"}]}}`)
+			case "pattern_prompt":
+				fmt.Print(`{"result":{"panes":[{"pane_id":"w1:p1","agent_status":"working","focused":true,"terminal_title":"agent-pane"}]}}`)
 			default:
-				fmt.Print(`{"output":"Default status","waiting":false}`)
+				fmt.Print(`{"result":{"panes":[{"pane_id":"w1:p1","agent_status":"idle","focused":true,"terminal_title":"agent-pane"}]}}`)
 			}
-		case "approve", "reject", "input":
-			if os.Getenv("TEST_HERDR_FAIL") == "1" {
-				os.Exit(1)
+		case "read":
+			switch mode {
+			case "pattern_prompt":
+				fmt.Print(`Do you want to apply these changes? (y/n)`)
+			case "blocked":
+				fmt.Print(`Approval required for file edit.`)
+			default:
+				fmt.Print(`Agent working normally...`)
 			}
+		case "send-keys", "send-text":
 			os.Exit(0)
 		default:
-			os.Exit(1)
+			os.Exit(0)
 		}
+	default:
+		os.Exit(0)
 	}
 }
 
-func TestGetStatus_JSONWaiting(t *testing.T) {
+func TestGetStatus_BlockedState(t *testing.T) {
 	oldExec := execCommand
 	defer func() { execCommand = oldExec }()
 	execCommand = fakeExecCommand
 
-	t.Setenv("TEST_HERDR_MODE", "json_waiting")
+	t.Setenv("TEST_HERDR_MODE", "blocked")
+	status, err := GetStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !status.HerdrOnline {
+		t.Errorf("expected HerdrOnline to be true")
+	}
+	if !status.Waiting {
+		t.Errorf("expected waiting to be true for blocked agent")
+	}
+	if status.PaneID != "w1:p1" {
+		t.Errorf("expected pane w1:p1, got %s", status.PaneID)
+	}
+}
+
+func TestGetStatus_PromptPattern(t *testing.T) {
+	oldExec := execCommand
+	defer func() { execCommand = oldExec }()
+	execCommand = fakeExecCommand
+
+	t.Setenv("TEST_HERDR_MODE", "pattern_prompt")
 	status, err := GetStatus()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !status.Waiting {
-		t.Errorf("expected waiting to be true")
-	}
-	if status.Output != "Approval required: edit file? (y/n)" {
-		t.Errorf("unexpected output: %s", status.Output)
+		t.Errorf("expected waiting to be true from prompt pattern match")
 	}
 }
 
@@ -93,7 +125,10 @@ func TestGetStatus_FallbackOnError(t *testing.T) {
 	t.Setenv("TEST_HERDR_MODE", "fail")
 	status, err := GetStatus()
 	if err == nil {
-		t.Fatalf("expected error on failed herdr-core")
+		t.Fatalf("expected error on failed herdr")
+	}
+	if status.HerdrOnline {
+		t.Errorf("expected HerdrOnline to be false on error")
 	}
 	if status.Waiting {
 		t.Errorf("expected waiting to be false on error")
@@ -103,31 +138,13 @@ func TestGetStatus_FallbackOnError(t *testing.T) {
 	}
 }
 
-func TestGetStatus_RawText(t *testing.T) {
-	oldExec := execCommand
-	defer func() { execCommand = oldExec }()
-	execCommand = fakeExecCommand
-
-	t.Setenv("TEST_HERDR_MODE", "raw_text")
-	status, err := GetStatus()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if status.Waiting {
-		t.Errorf("expected waiting to be false")
-	}
-	if status.Output != "Running agent task 123..." {
-		t.Errorf("unexpected output: %s", status.Output)
-	}
-}
-
 func TestSendAction(t *testing.T) {
 	oldExec := execCommand
 	defer func() { execCommand = oldExec }()
 	execCommand = fakeExecCommand
 
-	tests := []string{"approve", "reject", "custom input"}
-	for _, action := range tests {
+	actions := []string{"approve", "reject", "enter", "esc", "custom command text"}
+	for _, action := range actions {
 		t.Run(action, func(t *testing.T) {
 			if err := SendAction(action); err != nil {
 				t.Errorf("SendAction(%q) failed: %v", action, err)

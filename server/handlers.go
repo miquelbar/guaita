@@ -99,7 +99,6 @@ func IsLoopback(remoteAddr string) bool {
 	if err != nil {
 		host = remoteAddr
 	}
-	// Strip IPv6 brackets if present
 	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
 	ip := net.ParseIP(host)
 	if ip != nil {
@@ -169,9 +168,13 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type wsPayload struct {
-	Output  string       `json:"output"`
-	Waiting bool         `json:"waiting"`
-	Clients []ClientInfo `json:"clients,omitempty"`
+	Output      string       `json:"output"`
+	Waiting     bool         `json:"waiting"`
+	PaneID      string       `json:"pane_id,omitempty"`
+	AgentState  string       `json:"agent_state,omitempty"`
+	Title       string       `json:"title,omitempty"`
+	HerdrOnline bool         `json:"herdr_online"`
+	Clients     []ClientInfo `json:"clients,omitempty"`
 }
 
 // HandleWebSocket streams real-time status and telemetry to connected clients.
@@ -195,8 +198,12 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		status, _ := s.statusProvider()
 		payload := wsPayload{
-			Output:  status.Output,
-			Waiting: status.Waiting,
+			Output:      status.Output,
+			Waiting:     status.Waiting,
+			PaneID:      status.PaneID,
+			AgentState:  status.AgentState,
+			Title:       status.Title,
+			HerdrOnline: status.HerdrOnline,
 		}
 		if isLocal {
 			payload.Clients = s.hub.ListClients()
