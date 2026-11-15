@@ -1,0 +1,169 @@
+package notify
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"sync"
+	"time"
+)
+
+// TelegramNotifier sends interactive messages with inline keyboards to Telegram.
+type TelegramNotifier struct {
+	Token    string
+	ChatID   string
+	Client   *http.Client
+	onAction func(string)
+	stopOnce sync.Once
+	stopChan chan struct{}
+}
+
+// NewTelegram creates a TelegramNotifier and starts the callback query listener if enabled.
+func NewTelegram(token, chatID string, onAction func(string)) *TelegramNotifier {
+	t := &TelegramNotifier{
+		Token:    token,
+		ChatID:   chatID,
+		Client:   &http.Client{Timeout: 10 * time.Second},
+		onAction: onAction,
+		stopChan: make(chan struct{}),
+	}
+
+	if token != "" && chatID != "" && onAction != nil {
+		go t.pollUpdates()
+	}
+
+	return t
+}
+
+// Name returns the channel identifier.
+func (t *TelegramNotifier) Name() string {
+	return "telegram"
+}
+
+// Close stops the background update poller.
+func (t *TelegramNotifier) Close() {
+	t.stopOnce.Do(func() {
+		close(t.stopChan)
+	})
+}
+
+// Notify sends an alert message with inline buttons to the configured Telegram chat.
+func (t *TelegramNotifier) Notify(event NotificationEvent) error {
+	if t.Token == "" || t.ChatID == "" {
+		return nil
+	}
+
+	messageText := fmt.Sprintf("🛡️ *Guaita Sentinel Alert*\n\nAgent in pane `%s` is paused awaiting human approval:\n\n```\n%s\n```",
+		event.PaneID,
+		event.Body,
+	)
+
+	payload := map[string]interface{}{
+		"chat_id":    t.ChatID,
+		"text":       messageText,
+		"parse_mode": "Markdown",
+		"reply_markup": map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{
+				{
+					{"text": "✓ APPROVE (Y)", "callback_data": "approve"},
+					{"text": "✕ REJECT (N)", "callback_data": "reject"},
+				},
+				{
+					{"text": "📱 Open Guaita Web", "url": event.PairingURL},
+				},
+			},
+		},
+	}
+
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", t.Token)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("telegram returned HTTP %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+type telegramUpdate struct {
+	UpdateID      int64 `json:"update_id"`
+	CallbackQuery *struct {
+		ID   string `json:"id"`
+		Data string `json:"data"`
+		From struct {
+			FirstName string `json:"first_name"`
+		} `json:"from"`
+	} `json:"callback_query"`
+}
+
+type telegramUpdatesResponse struct {
+	OK     bool             `json:"ok"`
+	Result []telegramUpdate `json:"result"`
+}
+
+func (t *TelegramNotifier) pollUpdates() {
+	var offset int64 = 0
+
+	for {
+		select {
+		case <-t.stopChan:
+			return
+		default:
+		}
+
+		url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=15", t.Token, offset)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		resp, err := t.Client.Do(req)
+		if err != nil {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+
+		var data telegramUpdatesResponse
+		if err := json.NewDecoder(resp.Body).Decode(&data); err == nil && data.OK {
+			for _, u := range data.Result {
+				if u.UpdateID >= offset {
+					offset = u.UpdateID + 1
+				}
+
+				if u.CallbackQuery != nil && t.onAction != nil {
+					action := u.CallbackQuery.Data
+					t.onAction(action)
+					t.answerCallbackQuery(u.CallbackQuery.ID, fmt.Sprintf("Action '%s' dispatched!", action))
+				}
+			}
+		}
+		resp.Body.Close()
+	}
+}
+
+func (t *TelegramNotifier) answerCallbackQuery(queryID, text string) {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery", t.Token)
+	payload := map[string]string{
+		"callback_query_id": queryID,
+		"text":              text,
+	}
+	b, _ := json.Marshal(payload)
+	_, _ = t.Client.Post(url, "application/json", bytes.NewReader(b))
+}

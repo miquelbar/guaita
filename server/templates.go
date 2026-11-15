@@ -9,12 +9,16 @@ import (
 
 // AdminPageData contains parameters needed to render the Localhost Admin Control Center.
 type AdminPageData struct {
-	PairingURL   string
-	QRCodeBase64 string
-	SessionDays  int
-	SessionToken string
-	LocalIP      string
-	Port         string
+	PairingURL      string
+	QRCodeBase64    string
+	SessionDays     int
+	SessionToken    string
+	LocalIP         string
+	Port            string
+	NtfyTopic       string
+	NtfyURL         string
+	NtfyQRBase64    string
+	TelegramActive  bool
 }
 
 // GenerateQRBase64 encodes a target URL into a Base64-encoded PNG image string.
@@ -33,12 +37,21 @@ func RenderMobileHTML(sessionDays int) string {
 
 // RenderAdminHTML renders the full Localhost Admin & Control Center interface in English.
 func RenderAdminHTML(data AdminPageData) string {
+	tgStatus := "Not Configured"
+	if data.TelegramActive {
+		tgStatus = "Active (Connected)"
+	}
+
 	return fmt.Sprintf(adminTemplate,
 		data.LocalIP,
 		data.Port,
 		data.QRCodeBase64,
 		data.PairingURL,
 		data.SessionDays,
+		data.NtfyQRBase64,
+		data.NtfyTopic,
+		data.NtfyURL,
+		tgStatus,
 	)
 }
 
@@ -48,6 +61,10 @@ const mobileTemplate = `<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Guaita // Mobile Sentinel</title>
+    <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Guaita">
     <style>
         :root {
             --bg: #0b0f19;
@@ -233,7 +250,6 @@ const mobileTemplate = `<!DOCTYPE html>
         .pill-btn:active { transform: scale(0.96); }
         .pill-approve { background: var(--success); color: #fff; }
         .pill-reject { background: var(--danger); color: #fff; }
-        .pill-secondary { background: var(--surface-hover); color: var(--text-dim); border: 1px solid var(--surface-border); }
 
         /* Floating ChatGPT-style input bar */
         .bottom-bar {
@@ -379,6 +395,11 @@ const mobileTemplate = `<!DOCTYPE html>
     const approvalCard = document.getElementById('approvalCard');
     const chatContainer = document.getElementById('chatView');
     let wasWaiting = false;
+
+    // Service Worker Registration for PWA / iOS Web Push
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW registration error:', err));
+    }
 
     function switchView(mode) {
         if (mode === 'chat') {
@@ -809,6 +830,24 @@ const adminTemplate = `<!DOCTYPE html>
             background: var(--accent);
             color: #0b0f19;
         }
+
+        /* iOS Push Notification Card */
+        .notify-channel {
+            background: rgba(0,0,0,0.25);
+            border: 1px solid var(--surface-border);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-top: 8px;
+            font-size: 0.78rem;
+        }
+        .channel-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
     </style>
 </head>
 <body>
@@ -838,6 +877,46 @@ const adminTemplate = `<!DOCTYPE html>
                 </div>
                 <div style="font-size: 0.72rem; color: var(--text-dim); margin-top: 10px; line-height: 1.4;">
                     Scan with your mobile camera. Sessions persist for <strong>%d days</strong> across Wi-Fi and UniFi Teleport VPN.
+                </div>
+            </div>
+
+            <!-- iOS Notification Channels Card -->
+            <div class="card">
+                <div class="card-header">
+                    <span>🔔 iOS Push Channels</span>
+                </div>
+                <div class="notify-channel">
+                    <div class="channel-title">
+                        <span>⭐️ ntfy.sh (Interactive Push)</span>
+                        <span style="color: var(--success); font-size: 0.7rem;">Active</span>
+                    </div>
+                    <div style="display: flex; gap: 10px; align-items: center; margin-top: 6px;">
+                        <img src="data:image/png;base64,%s" style="width: 64px; height: 64px; background: #fff; padding: 4px; border-radius: 6px;" alt="ntfy QR">
+                        <div style="flex: 1; font-size: 0.7rem; color: var(--text-dim);">
+                            <div>Topic: <strong>%s</strong></div>
+                            <div style="margin-top: 4px;"><a href="%s" target="_blank" style="color: var(--accent); text-decoration: none;">Open in ntfy app →</a></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="notify-channel">
+                    <div class="channel-title">
+                        <span>💬 Telegram Bot</span>
+                        <span style="color: var(--accent); font-size: 0.7rem;">%s</span>
+                    </div>
+                    <div style="font-size: 0.7rem; color: var(--text-dim);">
+                        Sends interactive inline buttons directly to your iPhone and Apple Watch.
+                    </div>
+                </div>
+
+                <div class="notify-channel">
+                    <div class="channel-title">
+                        <span>📱 Web Push PWA</span>
+                        <span style="color: var(--text-dim); font-size: 0.7rem;">iOS 16.4+</span>
+                    </div>
+                    <div style="font-size: 0.7rem; color: var(--text-dim);">
+                        Add Guaita to Home Screen on Safari to enable APNs web notifications.
+                    </div>
                 </div>
             </div>
 

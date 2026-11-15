@@ -13,16 +13,22 @@ import (
 	"time"
 
 	"guaita/herdr"
+	"guaita/notify"
 	"github.com/gorilla/websocket"
 )
 
 // Config specifies runtime parameters for the server.
 type Config struct {
-	SessionToken string
-	SessionDays  int
-	PollInterval time.Duration
-	LocalIP      string
-	Port         string
+	SessionToken    string
+	SessionDays     int
+	PollInterval    time.Duration
+	LocalIP         string
+	Port            string
+	Dispatcher      *notify.Dispatcher
+	WebPushStore    *notify.WebPushStore
+	NtfyTopic       string
+	NtfyServer      string
+	TelegramEnabled bool
 }
 
 // Server provides HTTP and WebSocket handlers for Guaita.
@@ -49,6 +55,9 @@ func New(cfg Config) *Server {
 	if cfg.Port == "" {
 		cfg.Port = "8085"
 	}
+	if cfg.NtfyServer == "" {
+		cfg.NtfyServer = "https://ntfy.sh"
+	}
 
 	return &Server{
 		cfg: cfg,
@@ -67,6 +76,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/", s.HandleIndex)
 	mux.HandleFunc("/ws", s.HandleWebSocket)
 	mux.HandleFunc("/action", s.HandleAction)
+	mux.HandleFunc("/manifest.json", s.HandleManifest)
+	mux.HandleFunc("/sw.js", s.HandleServiceWorker)
+	mux.HandleFunc("/api/webpush/subscribe", s.HandleWebPushSubscribe)
 	mux.HandleFunc("/api/clients/disconnect", s.HandleDisconnectClient)
 	mux.HandleFunc("/api/token/regenerate", s.HandleRegenerateToken)
 	return mux
@@ -132,13 +144,18 @@ func (s *Server) IsAuthorized(r *http.Request) bool {
 func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 	if IsLoopback(r.RemoteAddr) {
 		pairingURL := s.PairingURL()
+		ntfyURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(s.cfg.NtfyServer, "/"), s.cfg.NtfyTopic)
 		data := AdminPageData{
-			PairingURL:   pairingURL,
-			QRCodeBase64: GenerateQRBase64(pairingURL),
-			SessionDays:  s.cfg.SessionDays,
-			SessionToken: s.Token(),
-			LocalIP:      s.cfg.LocalIP,
-			Port:         s.cfg.Port,
+			PairingURL:      pairingURL,
+			QRCodeBase64:    GenerateQRBase64(pairingURL),
+			SessionDays:     s.cfg.SessionDays,
+			SessionToken:    s.Token(),
+			LocalIP:         s.cfg.LocalIP,
+			Port:            s.cfg.Port,
+			NtfyTopic:       s.cfg.NtfyTopic,
+			NtfyURL:         ntfyURL,
+			NtfyQRBase64:    GenerateQRBase64(ntfyURL),
+			TelegramActive:  s.cfg.TelegramEnabled,
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
@@ -197,6 +214,24 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		status, _ := s.statusProvider()
+
+		// Trigger multi-channel push notification if state transitioned to waiting
+		if s.cfg.Dispatcher != nil && status.Waiting {
+			approveURL := fmt.Sprintf("http://%s:%s/action?token=%s&action=approve", s.cfg.LocalIP, s.cfg.Port, s.Token())
+			rejectURL := fmt.Sprintf("http://%s:%s/action?token=%s&action=reject", s.cfg.LocalIP, s.cfg.Port, s.Token())
+
+			s.cfg.Dispatcher.DispatchOnWaiting(status.Waiting, notify.NotificationEvent{
+				Title:            "🛡️ Guaita: Approval Required",
+				Body:             status.Output,
+				PaneID:           status.PaneID,
+				PairingURL:       s.PairingURL(),
+				ActionApproveURL: approveURL,
+				ActionRejectURL:  rejectURL,
+			})
+		} else if s.cfg.Dispatcher != nil {
+			s.cfg.Dispatcher.DispatchOnWaiting(false, notify.NotificationEvent{})
+		}
+
 		payload := wsPayload{
 			Output:      status.Output,
 			Waiting:     status.Waiting,
@@ -222,14 +257,45 @@ func (s *Server) HandleAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
-		return
-	}
+	_ = r.ParseForm()
 	action := r.FormValue("action")
 	if action != "" {
 		_ = s.actionSender(action)
 	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// HandleManifest serves the PWA manifest.
+func (s *Server) HandleManifest(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/manifest+json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(notify.ManifestJSON())
+}
+
+// HandleServiceWorker serves the PWA service worker.
+func (s *Server) HandleServiceWorker(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(notify.ServiceWorkerJS())
+}
+
+// HandleWebPushSubscribe registers a browser push subscription.
+func (s *Server) HandleWebPushSubscribe(w http.ResponseWriter, r *http.Request) {
+	if !s.IsAuthorized(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if s.cfg.WebPushStore == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	var sub notify.WebPushSubscription
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		http.Error(w, "Invalid subscription payload", http.StatusBadRequest)
+		return
+	}
+	s.cfg.WebPushStore.Subscribe(sub)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -262,7 +328,6 @@ func (s *Server) HandleRegenerateToken(w http.ResponseWriter, r *http.Request) {
 	newToken := hex.EncodeToString(bytes)
 	s.SetToken(newToken)
 
-	// Disconnect non-localhost clients so they are forced to re-authenticate
 	for _, client := range s.hub.ListClients() {
 		if !client.IsLocalhost {
 			s.hub.Disconnect(client.ID)

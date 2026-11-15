@@ -327,3 +327,29 @@ func TestHandleWebSocket_StreamAndHub(t *testing.T) {
 		t.Errorf("expected 1 connected client, got %d", len(payload.Clients))
 	}
 }
+
+func TestHandleManifestAndSW(t *testing.T) {
+	srv := New(Config{})
+
+	// Manifest
+	reqM := httptest.NewRequest(http.MethodGet, "/manifest.json", nil)
+	recM := httptest.NewRecorder()
+	srv.HandleManifest(recM, reqM)
+	if recM.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for manifest, got %d", recM.Code)
+	}
+	if recM.Header().Get("Content-Type") != "application/manifest+json" {
+		t.Errorf("unexpected content-type: %s", recM.Header().Get("Content-Type"))
+	}
+
+	// Service Worker
+	reqSW := httptest.NewRequest(http.MethodGet, "/sw.js", nil)
+	recSW := httptest.NewRecorder()
+	srv.HandleServiceWorker(recSW, reqSW)
+	if recSW.Code != http.StatusOK {
+		t.Errorf("expected 200 OK for sw.js, got %d", recSW.Code)
+	}
+	if recSW.Header().Get("Content-Type") != "application/javascript" {
+		t.Errorf("unexpected content-type: %s", recSW.Header().Get("Content-Type"))
+	}
+}
