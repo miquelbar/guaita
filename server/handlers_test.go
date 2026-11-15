@@ -172,6 +172,43 @@ func TestHandleAction_LocalhostAuthorized(t *testing.T) {
 	}
 }
 
+func TestHandleAction_RemoteAuthorizedWithHeadersAndJSON(t *testing.T) {
+	var capturedAction string
+	srv := New(Config{SessionToken: "secret123", SessionDays: 7})
+	srv.actionSender = func(action string) error {
+		capturedAction = action
+		return nil
+	}
+
+	// 1. With X-Guaita-Token header and JSON body
+	reqJSON := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(`{"action":"reject"}`))
+	reqJSON.RemoteAddr = "192.168.1.50:54321"
+	reqJSON.Header.Set("X-Guaita-Token", "secret123")
+	recJSON := httptest.NewRecorder()
+	srv.HandleAction(recJSON, reqJSON)
+
+	if recJSON.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for X-Guaita-Token, got %d", recJSON.Code)
+	}
+	if capturedAction != "reject" {
+		t.Errorf("expected 'reject', got %s", capturedAction)
+	}
+
+	// 2. With Authorization Bearer and query action
+	reqBearer := httptest.NewRequest(http.MethodPost, "/action?action=enter", nil)
+	reqBearer.RemoteAddr = "192.168.1.50:54321"
+	reqBearer.Header.Set("Authorization", "Bearer secret123")
+	recBearer := httptest.NewRecorder()
+	srv.HandleAction(recBearer, reqBearer)
+
+	if recBearer.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for Bearer token, got %d", recBearer.Code)
+	}
+	if capturedAction != "enter" {
+		t.Errorf("expected 'enter', got %s", capturedAction)
+	}
+}
+
 func TestHandleDisconnectClient_Security(t *testing.T) {
 	srv := New(Config{SessionToken: "secret123"})
 

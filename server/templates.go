@@ -59,7 +59,7 @@ const mobileTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Guaita // Mobile Sentinel</title>
     <link rel="manifest" href="/manifest.json">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -81,26 +81,31 @@ const mobileTemplate = `<!DOCTYPE html>
             --text-dim: #94a3b8;
         }
         * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body {
+        html, body {
+            height: 100vh;
+            height: 100dvh;
+            margin: 0;
+            padding: 0;
             background-color: var(--bg);
             color: var(--text);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 0;
+            overflow: hidden;
+        }
+        body {
             display: flex;
             flex-direction: column;
-            height: 100vh;
-            overflow: hidden;
         }
         header {
             padding: 12px 16px;
-            background: rgba(11, 15, 25, 0.85);
+            padding-top: max(12px, env(safe-area-inset-top));
+            background: rgba(11, 15, 25, 0.95);
             backdrop-filter: blur(12px);
             border-bottom: 1px solid var(--surface-border);
             display: flex;
             justify-content: space-between;
             align-items: center;
-            z-index: 10;
+            z-index: 50;
+            flex-shrink: 0;
         }
         .header-brand {
             display: flex;
@@ -136,6 +141,7 @@ const mobileTemplate = `<!DOCTYPE html>
             font-weight: 600;
             border-radius: 16px;
             cursor: pointer;
+            touch-action: manipulation;
         }
         .toggle-btn.active {
             background: var(--accent);
@@ -146,6 +152,7 @@ const mobileTemplate = `<!DOCTYPE html>
         .chat-container {
             flex: 1;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             padding: 16px;
             display: flex;
             flex-direction: column;
@@ -200,6 +207,7 @@ const mobileTemplate = `<!DOCTYPE html>
             margin-top: 6px;
             max-height: 280px;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             color: #cbd5e1;
         }
 
@@ -236,27 +244,34 @@ const mobileTemplate = `<!DOCTYPE html>
         }
         .pill-btn {
             border: none;
-            padding: 12px;
-            font-size: 0.88rem;
+            padding: 14px;
+            font-size: 0.92rem;
             font-weight: 600;
-            border-radius: 8px;
+            border-radius: 10px;
             cursor: pointer;
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 6px;
+            touch-action: manipulation;
             transition: transform 0.1s active, opacity 0.2s;
         }
-        .pill-btn:active { transform: scale(0.96); }
+        .pill-btn:active { transform: scale(0.96); opacity: 0.9; }
         .pill-approve { background: var(--success); color: #fff; }
         .pill-reject { background: var(--danger); color: #fff; }
 
         /* Floating ChatGPT-style input bar */
         .bottom-bar {
-            padding: 12px 16px 16px 16px;
-            background: rgba(11, 15, 25, 0.95);
+            padding: 10px 16px;
+            padding-bottom: max(16px, env(safe-area-inset-bottom));
+            padding-left: max(16px, env(safe-area-inset-left));
+            padding-right: max(16px, env(safe-area-inset-right));
+            background: rgba(11, 15, 25, 0.98);
             backdrop-filter: blur(16px);
             border-top: 1px solid var(--surface-border);
+            flex-shrink: 0;
+            position: relative;
+            z-index: 100;
         }
         .quick-chips {
             display: flex;
@@ -264,27 +279,29 @@ const mobileTemplate = `<!DOCTYPE html>
             overflow-x: auto;
             padding-bottom: 8px;
             scrollbar-width: none;
+            -webkit-overflow-scrolling: touch;
         }
         .quick-chips::-webkit-scrollbar { display: none; }
         .chip {
             background: var(--surface);
             border: 1px solid var(--surface-border);
             color: var(--text-dim);
-            font-size: 0.72rem;
-            padding: 4px 10px;
+            font-size: 0.76rem;
+            padding: 6px 12px;
             border-radius: 99px;
             white-space: nowrap;
             cursor: pointer;
             font-weight: 500;
+            touch-action: manipulation;
         }
-        .chip:hover, .chip:active { border-color: var(--accent); color: var(--accent); }
+        .chip:active { border-color: var(--accent); color: var(--accent); background: var(--surface-hover); }
         .input-pill-box {
             display: flex;
             align-items: center;
             background: var(--surface);
             border: 1px solid var(--surface-border);
-            border-radius: 24px;
-            padding: 4px 6px 4px 14px;
+            border-radius: 26px;
+            padding: 4px 6px 4px 16px;
             gap: 8px;
             transition: border-color 0.2s;
         }
@@ -294,14 +311,15 @@ const mobileTemplate = `<!DOCTYPE html>
             background: transparent;
             border: none;
             color: #fff;
-            font-size: 0.92rem;
+            font-size: 16px !important; /* Prevents auto-zoom and focus jump on iOS */
             outline: none;
-            padding: 6px 0;
+            padding: 8px 0;
+            -webkit-appearance: none;
         }
-        .chat-input::placeholder { color: var(--text-dim); font-size: 0.85rem; }
+        .chat-input::placeholder { color: var(--text-dim); font-size: 0.9rem; }
         .btn-send-round {
-            width: 34px;
-            height: 34px;
+            width: 36px;
+            height: 36px;
             border-radius: 50%%;
             background: var(--accent);
             color: #0b0f19;
@@ -309,13 +327,14 @@ const mobileTemplate = `<!DOCTYPE html>
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 16px;
+            font-size: 18px;
             font-weight: bold;
             cursor: pointer;
             flex-shrink: 0;
+            touch-action: manipulation;
             transition: transform 0.1s active, opacity 0.2s;
         }
-        .btn-send-round:active { transform: scale(0.92); }
+        .btn-send-round:active { transform: scale(0.92); opacity: 0.9; }
         .terminal-fullscreen {
             flex: 1;
             padding: 14px;
@@ -327,6 +346,7 @@ const mobileTemplate = `<!DOCTYPE html>
             background: #050811;
             color: #cbd5e1;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             display: none;
         }
     </style>
@@ -337,12 +357,12 @@ const mobileTemplate = `<!DOCTYPE html>
             <div class="avatar-circle">🛡️</div>
             <div class="brand-text">
                 <h1>Guaita Sentinel</h1>
-                <div id="connStatus" class="status-subtitle">● Live Herdr Link</div>
+                <div id="connStatus" class="status-subtitle">● Connecting...</div>
             </div>
         </div>
         <div class="view-toggle">
-            <button id="tabChat" class="toggle-btn active" onclick="switchView('chat')">💬 Chat</button>
-            <button id="tabTerminal" class="toggle-btn" onclick="switchView('terminal')">💻 Raw</button>
+            <button type="button" id="tabChat" class="toggle-btn active" onclick="switchView('chat')">💬 Chat</button>
+            <button type="button" id="tabTerminal" class="toggle-btn" onclick="switchView('terminal')">💻 Raw</button>
         </div>
     </header>
 
@@ -358,8 +378,8 @@ const mobileTemplate = `<!DOCTYPE html>
                     <div class="approval-title">⚠️ Approval Requested</div>
                     <div style="font-size: 0.8rem; color: #cbd5e1;">Agent is paused awaiting human confirmation:</div>
                     <div class="action-pills">
-                        <button class="pill-btn pill-approve" onclick="sendAction('approve')">✓ APPROVE (Y)</button>
-                        <button class="pill-btn pill-reject" onclick="sendAction('reject')">✕ REJECT (N)</button>
+                        <button type="button" class="pill-btn pill-approve" onclick="sendAction('approve')">✓ APPROVE (Y)</button>
+                        <button type="button" class="pill-btn pill-reject" onclick="sendAction('reject')">✕ REJECT (N)</button>
                     </div>
                 </div>
             </div>
@@ -372,21 +392,30 @@ const mobileTemplate = `<!DOCTYPE html>
     <!-- Bottom ChatGPT-style bar -->
     <div class="bottom-bar">
         <div class="quick-chips">
-            <span class="chip" onclick="sendAction('approve')">✓ Approve (Y)</span>
-            <span class="chip" onclick="sendAction('reject')">✕ Reject (N)</span>
-            <span class="chip" onclick="sendAction('enter')">↵ Enter</span>
-            <span class="chip" onclick="sendAction('esc')">⎋ Esc</span>
+            <button type="button" class="chip" onclick="sendAction('approve')">✓ Approve (Y)</button>
+            <button type="button" class="chip" onclick="sendAction('reject')">✕ Reject (N)</button>
+            <button type="button" class="chip" onclick="sendAction('enter')">↵ Enter</button>
+            <button type="button" class="chip" onclick="sendAction('esc')">⎋ Esc</button>
         </div>
-        <div class="input-pill-box">
-            <input type="text" id="userInput" class="chat-input" placeholder="Reply to agent or type command..." onkeydown="if(event.key==='Enter') sendInput()">
-            <button class="btn-send-round" onclick="sendInput()" title="Send">↑</button>
-        </div>
+        <form class="input-pill-box" action="javascript:void(0)" onsubmit="event.preventDefault(); sendInput();">
+            <input type="text" id="userInput" class="chat-input" placeholder="Reply to agent or type command..." enterkeyhint="send" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            <button type="submit" class="btn-send-round" title="Send">↑</button>
+        </form>
         <div style="text-align: center; font-size: 0.65rem; color: var(--text-dim); margin-top: 6px;">
             Encrypted session active (Expires in %d days)
         </div>
     </div>
 
 <script>
+    // Extract and preserve token across sessions
+    const urlParams = new URLSearchParams(window.location.search);
+    let sessionToken = urlParams.get('token');
+    if (sessionToken) {
+        try { localStorage.setItem('guaita_session_token', sessionToken); } catch(e){}
+    } else {
+        try { sessionToken = localStorage.getItem('guaita_session_token') || ''; } catch(e){}
+    }
+
     let ws;
     let reconnectInterval = 1000;
     const connStatus = document.getElementById('connStatus');
@@ -395,6 +424,17 @@ const mobileTemplate = `<!DOCTYPE html>
     const approvalCard = document.getElementById('approvalCard');
     const chatContainer = document.getElementById('chatView');
     let wasWaiting = false;
+
+    // Viewport handling for iOS Virtual Keyboard
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', () => {
+            document.body.style.height = window.visualViewport.height + 'px';
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        });
+        window.visualViewport.addEventListener('scroll', () => {
+            window.scrollTo(0, 0);
+        });
+    }
 
     // Service Worker Registration for PWA / iOS Web Push
     if ('serviceWorker' in navigator) {
@@ -435,7 +475,8 @@ const mobileTemplate = `<!DOCTYPE html>
 
     function connect() {
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(` + "`" + `${protocol}//${location.host}/ws` + "`" + `);
+        const tokenQuery = sessionToken ? '?token=' + encodeURIComponent(sessionToken) : '';
+        ws = new WebSocket(` + "`" + `${protocol}//${location.host}/ws${tokenQuery}` + "`" + `);
 
         ws.onopen = () => {
             connStatus.style.color = 'var(--success)';
@@ -478,24 +519,40 @@ const mobileTemplate = `<!DOCTYPE html>
         ws.onerror = () => { ws.close(); };
     }
 
-    function sendAction(action) {
-        appendUserMessage(action.toUpperCase());
-        fetch('/action', {
+    function dispatchAction(action, displayLabel) {
+        if (displayLabel) {
+            appendUserMessage(displayLabel);
+        }
+        const tokenQuery = sessionToken ? '?token=' + encodeURIComponent(sessionToken) : '';
+        fetch('/action' + tokenQuery, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Guaita-Token': sessionToken
+            },
             body: new URLSearchParams({action: action})
-        }).then(() => {
-            if (navigator.vibrate) navigator.vibrate(50);
+        }).then(res => {
+            if (!res.ok) {
+                console.error('Action failed:', res.status);
+            } else if (navigator.vibrate) {
+                navigator.vibrate(50);
+            }
+        }).catch(err => {
+            console.error('Network error on action:', err);
         });
+    }
+
+    function sendAction(action) {
+        dispatchAction(action, action.toUpperCase());
     }
 
     function sendInput() {
         const input = document.getElementById('userInput');
         const val = input.value.trim();
         if (!val) return;
-        appendUserMessage(val);
-        sendAction(val);
+        dispatchAction(val, val);
         input.value = '';
+        input.blur();
     }
 
     connect();

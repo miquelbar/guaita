@@ -137,6 +137,14 @@ func (s *Server) IsAuthorized(r *http.Request) bool {
 	if err == nil && cookie.Value == expectedToken {
 		return true
 	}
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		if strings.TrimPrefix(authHeader, "Bearer ") == expectedToken {
+			return true
+		}
+	}
+	if r.Header.Get("X-Guaita-Token") == expectedToken {
+		return true
+	}
 	return false
 }
 
@@ -259,6 +267,18 @@ func (s *Server) HandleAction(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = r.ParseForm()
 	action := r.FormValue("action")
+	if action == "" {
+		action = r.URL.Query().Get("action")
+	}
+	if action == "" && r.Body != nil {
+		var payload struct {
+			Action string `json:"action"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload.Action != "" {
+			action = payload.Action
+		}
+	}
 	if action != "" {
 		_ = s.actionSender(action)
 	}
