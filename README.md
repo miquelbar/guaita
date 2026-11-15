@@ -18,11 +18,11 @@
 
 ## Highlights
 
-* **🖥️ Localhost First-Class Admin:** Seamless admin dashboard when opening `http://localhost:8085/`. Zero token or QR prompt on loopback. Displays the mobile pairing QR code directly in the browser, live connected client telemetry, token revocation, and real-time terminal output.
-* **📱 2026 Mobile Gate (ChatGPT-Grade UI):** Responsive dark interface (`#0b0f19`) designed for one-thumb mobile control. Features conversation bubbles, auto-scrolling terminal cards, quick action pills (`✓ Approve`, `✕ Reject`, `↵ Enter`), and a floating ChatGPT-style pill input bar.
-* **🔔 Multi-Channel iOS Push Notifications:** 3 built-in notification pathways engineered specifically for iOS lock screens: **ntfy.sh**, **Native Web Push (PWA)**, and **Telegram Bot**.
-* **⚡ Native Herdr Integration (with `tmux` Fallback):** Auto-discovers the installed `herdr` binary, queries the active session socket, identifies focused panes, parses lifecycle states (`blocked`, `idle`, `working`), and injects keyboard actions via `pane send-keys` and `pane send-text`. If `herdr` is unavailable or offline, Guaita automatically falls back to `tmux` (`list-panes`, `capture-pane`, `send-keys`).
-* **🛡️ Hardened Single-Session Security:** One-time pairing tokens exchanged for a 256-bit `HttpOnly` `SameSite=Strict` session cookie (`Secure` when TLS is enabled), strict single-remote-session enforcement, built-in HTTPS/WSS (`-tls`), CSRF/CSWSH protection, and per-IP brute-force rate limiting.
+* **🖥️ Localhost Admin Dashboard:** Manage mobile pairing QR codes, connected clients (kick/ban), security audit logs, Telegram/ntfy settings, and live agent output from your desktop browser.
+* **📱 Mobile Web UI:** Dark-mode interface designed for quick mobile responses—live terminal stream, chat view with message timestamps, one-tap quick actions (`Approve`, `Reject`, `Enter`, `Esc`), and custom text input.
+* **🔔 Multi-Channel Notifications:** Supports **ntfy.sh**, **Telegram Bot** (with inline approval buttons), and **Web Push (PWA)**.
+* **⚡ Native Herdr Integration (with `tmux` Fallback):** Auto-discovers `herdr`, queries active sessions and focused panes, parses lifecycle states (`blocked`, `idle`, `working`), and injects actions via `pane send-keys` / `pane send-text`. Falls back automatically to `tmux` (`list-panes`, `capture-pane`, `send-keys`) if `herdr` is offline.
+* **🛡️ Single-Session Security:** One-time pairing tokens exchanged for a 256-bit `HttpOnly`, `SameSite=Lax` session cookie (`Secure` under TLS/HTTPS), single active remote session enforcement, built-in HTTPS/WSS (`-tls`), DNS Rebinding & CSRF/CSWSH protection, and per-IP rate limiting.
 
 ---
 
@@ -171,7 +171,7 @@ guaita/
 │   ├── handlers_test.go # HTTP, auth, and WebSocket unit tests
 │   ├── security_test.go # Intrusion & security regression tests
 │   ├── hub.go           # Active client telemetry and connection registry
-│   └── templates.go     # Embedded ChatGPT-grade Web SPA (Admin + Mobile Gate)
+│   └── templates.go     # Embedded Web SPA (Admin Dashboard + Mobile Gate)
 └── herdr/
     ├── client.go        # Herdr CLI integration, pane detection, and key injection
     └── client_test.go   # Subprocess mock tests
