@@ -26,45 +26,45 @@
 
 ---
 
-## iOS Push Notifications: The 3 Supported Options
+## Mobile Push Notifications (iOS & Android)
 
-Apple imposes strict background execution and lock-screen restrictions on iOS. Guaita natively supports all three viable pathways to alert you on iPhone and Apple Watch when an agent requires approval:
+Guaita supports three notification channels to alert you on **iOS**, **Android**, and smartwatches when an agent pauses for input:
 
-### 1. `ntfy.sh` (Recommended — Instant & Zero-Friction) ⭐️
-* **How it works:** Uses the free, open-source **[ntfy iOS App](https://apps.apple.com/app/ntfy/id1625396347)**. Requires **no accounts**, **no registration**, and **no API keys**.
-* **Lock Screen Support:** Delivers high-priority native banners with sound and vibration even when your iPhone is locked or in your pocket.
-* **Zero-Leak Notifications:** Alerts include a clean link (`http(s)://<LAN_IP>:<PORT>/`) without embedding session tokens in URLs or public `ntfy.sh` payloads. Once your phone is paired, opening Guaita uses your persistent `HttpOnly` session cookie.
+### 1. `ntfy.sh` (Recommended — Instant & Zero-Friction)
+* **How it works:** Uses the free, open-source **ntfy** app ([Android on Google Play](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [F-Droid](https://fdroid.org/packages/io.heckel.ntfy/) / [iOS App Store](https://apps.apple.com/app/ntfy/id1625396347)). Requires **no accounts**, **no registration**, and **no API keys**.
+* **Lock Screen Support:** Delivers high-priority native banners with sound and vibration even when your phone is locked or in your pocket.
+* **Zero-Leak Notifications:** Alerts include a clean link (`http(s)://<LAN_IP>:<PORT>/`) without embedding session tokens in URLs, and redact raw terminal output on the public `ntfy.sh` relay.
 * **How to enable:**
   ```bash
-  ./bin/guaita -ntfy my-private-topic
+  guaita -ntfy my-private-topic
   ```
-  Or let Guaita auto-generate a private topic for you. The QR code to subscribe in the ntfy app appears right inside the Localhost Admin dashboard.
+  Or let Guaita auto-generate a private topic for you. The QR code to subscribe in the ntfy app appears inside the Settings tab of the Localhost Admin dashboard.
 
 ---
 
-### 2. Native Web Push PWA (iOS 16.4+)
-* **How it works:** Uses Apple's native Web Push API over Apple Push Notification service (APNs).
-* **Requirements:**
-  1. Open the Guaita URL in Safari on iOS.
-  2. Tap **Share** -> **Add to Home Screen** (*Añadir a pantalla de inicio*).
-  3. Launch Guaita from the Home Screen icon.
-  4. Tap **Enable Push Notifications** when prompted.
-* **Network Requirement:** Apple requires HTTPS for Service Worker push subscriptions. When accessing over LAN without SSL, pair Guaita with UniFi Teleport, Tailscale HTTPS, or a reverse proxy (Caddy / Cloudflare Tunnel).
-* **Built-in Support:** Guaita automatically serves a compliant Web App Manifest (`/manifest.json`), Service Worker (`/sw.js`), and subscription registration endpoint (`/api/webpush/subscribe`).
+### 2. Native Web Push PWA (Android & iOS 16.4+)
+* **How it works:** Uses standard Web Push APIs (FCM/Mozilla Push on Android Chrome/Firefox, and APNs on iOS 16.4+ Safari). On Android, the Mobile Gate also triggers native haptic vibration (`navigator.vibrate`) when an approval prompt appears.
+* **Setup:**
+  1. Open the Guaita URL in Chrome/Firefox (Android) or Safari (iOS).
+  2. Install as an app (**Install app** on Android, or **Share → Add to Home Screen** on iOS).
+  3. Launch Guaita from the Home Screen icon and allow notifications when prompted.
+* **Network Requirement:** Browsers require HTTPS for Service Worker push subscriptions (use `-tls`, Cloudflare Tunnel, Tailscale HTTPS, or a reverse proxy).
+* **Built-in Support:** Guaita serves a Web App Manifest (`/manifest.json`), Service Worker (`/sw.js`), and subscription endpoint (`/api/webpush/subscribe`).
 
 ---
 
 ### 3. Telegram Bot Integration
 * **How it works:** Sends interactive alerts to your personal Telegram account or private group.
 * **Features:**
-  * Delivers instant notifications to your iPhone, iPad, Mac, and **Apple Watch**.
-  * Messages include Markdown summaries of the agent's prompt and interactive inline buttons: `[ ✓ APPROVE (Y) ]` and `[ ✕ REJECT (N) ]`.
-  * Guaita listens for inline button callbacks; tapping a button on your Apple Watch or phone immediately unlocks the agent in Herdr.
+  * Delivers instant notifications to **Android**, **iPhone**, **Wear OS / Apple Watch**, and desktop.
+  * Messages include the prompt context and interactive inline buttons: `[ ✓ APPROVE (Y) ]` and `[ ✕ REJECT (N) ]`.
+  * Guaita listens for inline button callbacks; tapping a button on your phone or watch immediately unlocks the agent.
 * **How to enable:**
+  Configure it directly in the **Settings** tab of the Localhost Admin dashboard, or via environment variables:
   ```bash
   export TELEGRAM_BOT_TOKEN="123456789:ABCdefGHIjklMNOpqrSTUvwxYZ"
   export TELEGRAM_CHAT_ID="987654321"
-  ./bin/guaita
+  guaita
   ```
 
 ---
