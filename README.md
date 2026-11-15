@@ -1,10 +1,16 @@
-# Guaita 🛡️
+<p align="center">
+  <img src="assets/logo.png" width="140" alt="Guaita Logo">
+</p>
 
-[![Go Version](https://img.shields.io/badge/go-1.24-blue.svg)](https://golang.org)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/miquelbar/guaita?label=release)](https://github.com/miquelbar/guaita/releases/latest)
-[![CI](https://github.com/miquelbar/guaita/actions/workflows/ci.yml/badge.svg)](https://github.com/miquelbar/guaita/actions/workflows/ci.yml)
-[![Architecture](https://img.shields.io/badge/architecture-mobile--first-purple.svg)](https://github.com/miquelbar/guaita)
+<h1 align="center">Guaita 🛡️</h1>
+
+<p align="center">
+  <a href="https://golang.org"><img src="https://img.shields.io/badge/go-1.24-blue.svg" alt="Go Version"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License"></a>
+  <a href="https://github.com/miquelbar/guaita/releases/latest"><img src="https://img.shields.io/github/v/release/miquelbar/guaita?label=release" alt="Release"></a>
+  <a href="https://github.com/miquelbar/guaita/actions/workflows/ci.yml"><img src="https://github.com/miquelbar/guaita/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/miquelbar/guaita"><img src="https://img.shields.io/badge/architecture-mobile--first-purple.svg" alt="Architecture"></a>
+</p>
 
 > **Guaita** (*Catalan for "sentinel" or "lookout"*) is a lightweight, mobile-first human-in-the-loop sentinel written in pure Go. It monitors AI coding agents (Claude Code, Agy, or orchestrators) running in terminal workspaces via [Herdr](https://herdr.dev), notifies you on your mobile phone whenever an agent is waiting for human approval (`Yes/No` or text input), and allows instant, cryptographically secured responses.
 
