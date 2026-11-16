@@ -402,3 +402,47 @@ func TestHandleManifestAndSW(t *testing.T) {
 		t.Errorf("unexpected content-type: %s", recSW.Header().Get("Content-Type"))
 	}
 }
+
+
+func TestHandleSelectPane_AndPaneRouting(t *testing.T) {
+	srv := New(Config{SessionToken: "pane-secret"})
+	var gotPane, gotAction string
+	srv.actionPaneSender = func(paneID, action string) error {
+		gotPane = paneID
+		gotAction = action
+		return nil
+	}
+
+	// Select a specific pane from localhost
+	reqSel := httptest.NewRequest(http.MethodPost, "/api/panes/select", strings.NewReader("pane_id=w2:p1"))
+	reqSel.RemoteAddr = "127.0.0.1:50000"
+	reqSel.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recSel := httptest.NewRecorder()
+	srv.HandleSelectPane(recSel, reqSel)
+	if recSel.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on select pane, got %d", recSel.Code)
+	}
+
+	// Action without explicit pane_id must route to the pinned pane
+	reqAct := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader("action=approve"))
+	reqAct.RemoteAddr = "127.0.0.1:50000"
+	reqAct.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recAct := httptest.NewRecorder()
+	srv.HandleAction(recAct, reqAct)
+	if recAct.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on action, got %d", recAct.Code)
+	}
+	if gotPane != "w2:p1" || gotAction != "approve" {
+		t.Errorf("expected routed action (w2:p1, approve), got (%q, %q)", gotPane, gotAction)
+	}
+
+	// Action with explicit pane_id overrides pinned pane
+	reqAct2 := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader("action=reject&pane_id=%253"))
+	reqAct2.RemoteAddr = "127.0.0.1:50000"
+	reqAct2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	recAct2 := httptest.NewRecorder()
+	srv.HandleAction(recAct2, reqAct2)
+	if gotPane != "%3" || gotAction != "reject" {
+		t.Errorf("expected explicit pane override (%%3, reject), got (%q, %q)", gotPane, gotAction)
+	}
+}

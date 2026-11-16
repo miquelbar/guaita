@@ -11,14 +11,31 @@ import (
 	"time"
 )
 
-// AgentStatus represents the state of the monitored AI agent via Herdr.
+// PaneSummary describes an active Herdr or tmux pane for multi-session selection.
+type PaneSummary struct {
+	PaneID     string `json:"pane_id"`
+	Title      string `json:"title,omitempty"`
+	Agent      string `json:"agent,omitempty"`
+	AgentState string `json:"agent_state,omitempty"`
+	Waiting    bool   `json:"waiting"`
+	Focused    bool   `json:"focused,omitempty"`
+	Backend    string `json:"backend,omitempty"`
+}
+
+// AgentStatus represents the state of the monitored AI agent via Herdr or tmux.
 type AgentStatus struct {
-	Output      string `json:"output"`
-	Waiting     bool   `json:"waiting"`
-	PaneID      string `json:"pane_id,omitempty"`
-	AgentState  string `json:"agent_state,omitempty"`
-	Title       string `json:"title,omitempty"`
-	HerdrOnline bool   `json:"herdr_online"`
+	Output      string        `json:"output"`
+	Waiting     bool          `json:"waiting"`
+	PaneID      string        `json:"pane_id,omitempty"`
+	AgentState  string        `json:"agent_state,omitempty"`
+	Title       string        `json:"title,omitempty"`
+	HerdrOnline bool          `json:"herdr_online"`
+	Panes       []PaneSummary `json:"panes,omitempty"`
+}
+
+type paneMeta struct {
+	isAgent bool
+	backend string
 }
 
 var (
@@ -28,6 +45,7 @@ var (
 	lastActivePane    string
 	lastActiveIsAgent bool
 	activeBackend     = "herdr"
+	knownPanes        = make(map[string]paneMeta)
 )
 
 // FindHerdrBinary locates the Herdr CLI binary on the machine.
@@ -108,6 +126,13 @@ func lastNonEmptyLines(text string, maxLines int) string {
 
 // GetStatus checks the current status of Herdr or returns a defensive fallback when inactive.
 func GetStatus() (AgentStatus, error) {
+	status, _, err := GetStatusWithPanes("")
+	return status, err
+}
+
+// GetStatusWithPanes returns the selected pane's status, a list of all waiting panes (for multi-session alerts),
+// and populates status.Panes with every detected Herdr or tmux pane.
+func GetStatusWithPanes(preferredPane string) (AgentStatus, []AgentStatus, error) {
 	bin := FindHerdrBinary()
 
 	// 1. Check Herdr server status
@@ -118,17 +143,17 @@ func GetStatus() (AgentStatus, error) {
 		var legacyStatus AgentStatus
 		if jsonErr := json.Unmarshal(statusRaw, &legacyStatus); jsonErr == nil && legacyStatus.Output != "" {
 			legacyStatus.HerdrOnline = true
-			return legacyStatus, nil
+			return legacyStatus, nil, nil
 		}
 		// Fallback to tmux if Herdr is unavailable
-		if tmuxStatus, ok := getTmuxStatus(); ok {
-			return tmuxStatus, nil
+		if tmuxStatus, tmuxWaiting, ok := getTmuxStatus(preferredPane); ok {
+			return tmuxStatus, tmuxWaiting, nil
 		}
 		return AgentStatus{
 			Output:      "⚡ Herdr / tmux offline or inactive",
 			Waiting:     false,
 			HerdrOnline: false,
-		}, err
+		}, nil, err
 	}
 
 	var statusData herdrStatusOutput
@@ -137,39 +162,38 @@ func GetStatus() (AgentStatus, error) {
 		var legacyStatus AgentStatus
 		if jsonErr := json.Unmarshal(statusRaw, &legacyStatus); jsonErr == nil && legacyStatus.Output != "" {
 			legacyStatus.HerdrOnline = true
-			return legacyStatus, nil
+			return legacyStatus, nil, nil
 		}
 	}
 
 	// 2. Prefer native `herdr agent list` for direct agent telemetry (agy, claude, etc.)
-	var selectedID, selectedAgentStatus, selectedTitle string
-	var isAgent bool
+	panes := make([]PaneSummary, 0)
+	metaMap := make(map[string]paneMeta)
 
 	if agentsRaw, agentErr := execCommand(bin, "agent", "list").Output(); agentErr == nil {
 		var agentsData agentListOutput
 		if json.Unmarshal(agentsRaw, &agentsData) == nil && len(agentsData.Result.Agents) > 0 {
-			selected := agentsData.Result.Agents[0]
 			for _, a := range agentsData.Result.Agents {
-				if a.Focused {
-					selected = a
-					break
+				title := a.TerminalTitle
+				if title == "" {
+					title = a.Agent
 				}
+				panes = append(panes, PaneSummary{
+					PaneID:     a.PaneID,
+					Title:      title,
+					Agent:      a.Agent,
+					AgentState: a.AgentStatus,
+					Waiting:    a.AgentStatus == "blocked",
+					Focused:    a.Focused,
+					Backend:    "herdr",
+				})
+				metaMap[a.PaneID] = paneMeta{isAgent: true, backend: "herdr"}
 			}
-			for _, a := range agentsData.Result.Agents {
-				if a.AgentStatus == "blocked" {
-					selected = a
-					break
-				}
-			}
-			selectedID = selected.PaneID
-			selectedAgentStatus = selected.AgentStatus
-			selectedTitle = selected.TerminalTitle
-			isAgent = true
 		}
 	}
 
 	// 2b. Fallback to `herdr pane list` if no active agents were returned
-	if selectedID == "" {
+	if len(panes) == 0 {
 		cmdPanes := execCommand(bin, "pane", "list")
 		panesRaw, err := cmdPanes.Output()
 		if err != nil {
@@ -177,7 +201,7 @@ func GetStatus() (AgentStatus, error) {
 				Output:      "⚡ Herdr server running (no active panes found)",
 				Waiting:     false,
 				HerdrOnline: true,
-			}, nil
+			}, nil, nil
 		}
 
 		var panesData paneListOutput
@@ -186,64 +210,130 @@ func GetStatus() (AgentStatus, error) {
 				Output:      "⚡ Herdr server running (no active panes)",
 				Waiting:     false,
 				HerdrOnline: true,
-			}, nil
+			}, nil, nil
 		}
 
-		selectedPane := panesData.Result.Panes[0]
 		for _, p := range panesData.Result.Panes {
-			if p.Focused {
-				selectedPane = p
-				break
-			}
+			panes = append(panes, PaneSummary{
+				PaneID:     p.PaneID,
+				Title:      p.TerminalTitle,
+				AgentState: p.AgentStatus,
+				Waiting:    p.AgentStatus == "blocked",
+				Focused:    p.Focused,
+				Backend:    "herdr",
+			})
+			metaMap[p.PaneID] = paneMeta{isAgent: false, backend: "herdr"}
 		}
-		for _, p := range panesData.Result.Panes {
-			if p.AgentStatus == "blocked" {
-				selectedPane = p
-				break
-			}
-		}
-		selectedID = selectedPane.PaneID
-		selectedAgentStatus = selectedPane.AgentStatus
-		selectedTitle = selectedPane.TerminalTitle
 	}
+
+	// Pick selected pane: preferredPane -> first waiting/blocked -> focused -> first
+	selectedIdx := 0
+	foundPreferred := false
+	if preferredPane != "" {
+		for i, p := range panes {
+			if p.PaneID == preferredPane {
+				selectedIdx = i
+				foundPreferred = true
+				break
+			}
+		}
+	}
+	if !foundPreferred {
+		for i, p := range panes {
+			if p.Focused {
+				selectedIdx = i
+				break
+			}
+		}
+		for i, p := range panes {
+			if p.Waiting {
+				selectedIdx = i
+				break
+			}
+		}
+	}
+
+	selected := panes[selectedIdx]
+	selectedMeta := metaMap[selected.PaneID]
 
 	activePaneMu.Lock()
-	lastActivePane = selectedID
-	lastActiveIsAgent = isAgent
+	lastActivePane = selected.PaneID
+	lastActiveIsAgent = selectedMeta.isAgent
 	activeBackend = "herdr"
+	for k, v := range metaMap {
+		knownPanes[k] = v
+	}
 	activePaneMu.Unlock()
 
-	// 3. Read pane output
-	cmdRead := execCommand(bin, "pane", "read", selectedID, "--source", "recent-unwrapped", "--lines", "80")
-	readRaw, _ := cmdRead.Output()
-	outputText := string(readRaw)
-	if strings.TrimSpace(outputText) == "" {
-		outputText = "Terminal active (waiting for agent activity in pane " + selectedID + ")"
+	readPane := func(id string) string {
+		raw, _ := execCommand(bin, "pane", "read", id, "--source", "recent-unwrapped", "--lines", "80").Output()
+		return string(raw)
 	}
 
-	// Herdr reports "blocked" when it explicitly detects an approval or question prompt.
-	// Fallback regex inspects the last 6 non-empty lines so TUI option dialogs (question + options + footer) are caught.
-	isWaiting := selectedAgentStatus == "blocked"
+	// 3. Read selected pane output and any other waiting/blocked panes for independent alerts
+	outputText := readPane(selected.PaneID)
+	if strings.TrimSpace(outputText) == "" {
+		outputText = "Terminal active (waiting for agent activity in pane " + selected.PaneID + ")"
+	}
+
+	isWaiting := selected.Waiting
 	if !isWaiting && promptRegex.MatchString(lastNonEmptyLines(outputText, 6)) {
 		isWaiting = true
+		panes[selectedIdx].Waiting = true
+	}
+
+	waitingStatuses := make([]AgentStatus, 0)
+	for i := range panes {
+		p := panes[i]
+		if !p.Waiting {
+			continue
+		}
+		pOut := outputText
+		if p.PaneID != selected.PaneID {
+			pOut = readPane(p.PaneID)
+		}
+		waitingStatuses = append(waitingStatuses, AgentStatus{
+			Output:      pOut,
+			Waiting:     true,
+			PaneID:      p.PaneID,
+			AgentState:  p.AgentState,
+			Title:       p.Title,
+			HerdrOnline: true,
+		})
 	}
 
 	return AgentStatus{
 		Output:      outputText,
 		Waiting:     isWaiting,
-		PaneID:      selectedID,
-		AgentState:  selectedAgentStatus,
-		Title:       selectedTitle,
+		PaneID:      selected.PaneID,
+		AgentState:  selected.AgentState,
+		Title:       selected.Title,
 		HerdrOnline: true,
-	}, nil
+		Panes:       panes,
+	}, waitingStatuses, nil
 }
 
-// SendAction dispatches an action (approve, reject, enter, or text input) to Herdr or tmux.
+// SendAction dispatches an action (approve, reject, enter, or text input) to the currently active pane.
 func SendAction(action string) error {
 	activePaneMu.RLock()
 	paneID := lastActivePane
+	activePaneMu.RUnlock()
+	return SendActionToPane(paneID, action)
+}
+
+// SendActionToPane dispatches an action to a specific Herdr or tmux paneID.
+func SendActionToPane(paneID, action string) error {
+	activePaneMu.RLock()
+	if paneID == "" {
+		paneID = lastActivePane
+	}
+	meta, ok := knownPanes[paneID]
 	isAgent := lastActiveIsAgent
 	backend := activeBackend
+	if ok {
+		isAgent = meta.isAgent
+		backend = meta.backend
+	}
 	activePaneMu.RUnlock()
 
 	cleanAction := strings.TrimSpace(action)
@@ -318,66 +408,116 @@ func WatchAgentBlocked(stop <-chan struct{}, onBlocked func()) {
 	}
 }
 
-func getTmuxStatus() (AgentStatus, bool) {
+func getTmuxStatus(preferredPane string) (AgentStatus, []AgentStatus, bool) {
 	tmuxBin, err := lookPath("tmux")
 	if err != nil {
-		return AgentStatus{}, false
+		return AgentStatus{}, nil, false
 	}
 
-	out, err := execCommand(tmuxBin, "list-panes", "-a", "-F", "#{pane_id}|#{pane_active}|#{session_attached}|#{pane_title}").Output()
+	out, err := execCommand(tmuxBin, "list-panes", "-a", "-F", "#{pane_id}|#{pane_active}|#{session_attached}|#{session_name}:#{window_index}.#{pane_index} #{pane_title}").Output()
 	if err != nil {
-		return AgentStatus{}, false
+		return AgentStatus{}, nil, false
 	}
 
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	var selectedID, selectedTitle string
+	panes := make([]PaneSummary, 0, len(lines))
+	outputs := make(map[string]string, len(lines))
+	waitingStatuses := make([]AgentStatus, 0)
+
 	for _, line := range lines {
 		parts := strings.SplitN(strings.TrimSpace(line), "|", 4)
 		if len(parts) < 3 || parts[0] == "" {
 			continue
 		}
-		if selectedID == "" {
-			selectedID = parts[0]
-			if len(parts) == 4 {
-				selectedTitle = parts[3]
-			}
+		id := parts[0]
+		focused := parts[1] == "1" && parts[2] == "1"
+		title := ""
+		if len(parts) == 4 {
+			title = strings.TrimSpace(parts[3])
 		}
-		if parts[1] == "1" && parts[2] == "1" {
-			selectedID = parts[0]
-			if len(parts) == 4 {
-				selectedTitle = parts[3]
-			}
-			break
+
+		readRaw, capErr := execCommand(tmuxBin, "capture-pane", "-p", "-t", id, "-S", "-80").Output()
+		if capErr != nil {
+			continue
+		}
+		outputText := string(readRaw)
+		if strings.TrimSpace(outputText) == "" {
+			outputText = "Terminal active (waiting for activity in tmux pane " + id + ")"
+		}
+		isWaiting := promptRegex.MatchString(lastNonEmptyLines(outputText, 6))
+		state := "tmux"
+
+		panes = append(panes, PaneSummary{
+			PaneID:     id,
+			Title:      title,
+			AgentState: state,
+			Waiting:    isWaiting,
+			Focused:    focused,
+			Backend:    "tmux",
+		})
+		outputs[id] = outputText
+
+		if isWaiting {
+			waitingStatuses = append(waitingStatuses, AgentStatus{
+				Output:      outputText,
+				Waiting:     true,
+				PaneID:      id,
+				AgentState:  state,
+				Title:       title,
+				HerdrOnline: true,
+			})
 		}
 	}
-	if selectedID == "" {
-		return AgentStatus{}, false
+
+	if len(panes) == 0 {
+		return AgentStatus{}, nil, false
 	}
+
+	selectedIdx := 0
+	foundPreferred := false
+	if preferredPane != "" {
+		for i, p := range panes {
+			if p.PaneID == preferredPane {
+				selectedIdx = i
+				foundPreferred = true
+				break
+			}
+		}
+	}
+	if !foundPreferred {
+		for i, p := range panes {
+			if p.Focused {
+				selectedIdx = i
+				break
+			}
+		}
+		for i, p := range panes {
+			if p.Waiting {
+				selectedIdx = i
+				break
+			}
+		}
+	}
+
+	selected := panes[selectedIdx]
 
 	activePaneMu.Lock()
-	lastActivePane = selectedID
+	lastActivePane = selected.PaneID
 	activeBackend = "tmux"
+	for _, p := range panes {
+		knownPanes[p.PaneID] = paneMeta{isAgent: false, backend: "tmux"}
+	}
 	activePaneMu.Unlock()
 
-	readRaw, err := execCommand(tmuxBin, "capture-pane", "-p", "-t", selectedID, "-S", "-80").Output()
-	if err != nil {
-		return AgentStatus{}, false
-	}
-
-	outputText := string(readRaw)
-	if strings.TrimSpace(outputText) == "" {
-		outputText = "Terminal active (waiting for activity in tmux pane " + selectedID + ")"
-	}
-
-	isWaiting := promptRegex.MatchString(lastNonEmptyLines(outputText, 2))
 	return AgentStatus{
-		Output:      outputText,
-		Waiting:     isWaiting,
-		PaneID:      selectedID,
-		AgentState:  "tmux",
-		Title:       selectedTitle,
+		Output:      outputs[selected.PaneID],
+		Waiting:     selected.Waiting,
+		PaneID:      selected.PaneID,
+		AgentState:  selected.AgentState,
+		Title:       selected.Title,
 		HerdrOnline: true,
-	}, true
+		Panes:       panes,
+	}, waitingStatuses, true
 }
 
 func sendTmuxAction(paneID, cleanAction string) error {

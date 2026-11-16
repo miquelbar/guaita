@@ -151,14 +151,16 @@ type Server struct {
 	pairingClaimed    bool
 	activeSessionID   string
 	activeAdminCookie string
+	selectedPane      string
 	telegramNotifier  *notify.TelegramNotifier
-	bannedIPs        map[string]time.Time
-	auditLog         []AuditEntry
-	hub              *Hub
-	limiter          *authRateLimiter
-	upgrader         websocket.Upgrader
-	statusProvider   func() (herdr.AgentStatus, error)
-	actionSender     func(string) error
+	bannedIPs         map[string]time.Time
+	auditLog          []AuditEntry
+	hub               *Hub
+	limiter           *authRateLimiter
+	upgrader          websocket.Upgrader
+	statusProvider    func() (herdr.AgentStatus, error)
+	actionSender      func(string) error
+	actionPaneSender  func(string, string) error
 }
 
 // New creates and configures a new Server instance.
@@ -188,12 +190,10 @@ func New(cfg Config) *Server {
 		cfg:               cfg,
 		activeAdminCookie: adminCookie,
 		telegramNotifier:  cfg.TelegramNotifier,
-		bannedIPs:        make(map[string]time.Time),
-		auditLog:         make([]AuditEntry, 0, maxAuditEntries),
-		hub:              NewHub(),
-		limiter:          newAuthRateLimiter(),
-		statusProvider:   herdr.GetStatus,
-		actionSender:     herdr.SendAction,
+		bannedIPs:         make(map[string]time.Time),
+		auditLog:          make([]AuditEntry, 0, maxAuditEntries),
+		hub:               NewHub(),
+		limiter:           newAuthRateLimiter(),
 	}
 	s.upgrader = websocket.Upgrader{
 		CheckOrigin: s.checkSameOrigin,
@@ -322,6 +322,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/clients/unban", s.HandleUnbanClient)
 	mux.HandleFunc("/api/token/regenerate", s.HandleRegenerateToken)
 	mux.HandleFunc("/api/telegram/config", s.HandleTelegramConfig)
+	mux.HandleFunc("/api/panes/select", s.HandleSelectPane)
 	return securityHeadersMiddleware(s.hostValidationMiddleware(mux))
 }
 
@@ -752,33 +753,72 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type wsPayload struct {
-	Output      string       `json:"output"`
-	Waiting     bool         `json:"waiting"`
-	PaneID      string       `json:"pane_id,omitempty"`
-	AgentState  string       `json:"agent_state,omitempty"`
-	Title       string       `json:"title,omitempty"`
-	HerdrOnline bool         `json:"herdr_online"`
-	Clients     []ClientInfo `json:"clients,omitempty"`
-	AuditLog    []AuditEntry `json:"audit_log,omitempty"`
-	BannedIPs   []string     `json:"banned_ips,omitempty"`
-	PairingURL  string       `json:"pairing_url,omitempty"`
-	QRBase64    string       `json:"qr_base64,omitempty"`
+	Output       string              `json:"output"`
+	Waiting      bool                `json:"waiting"`
+	PaneID       string              `json:"pane_id,omitempty"`
+	SelectedPane string              `json:"selected_pane,omitempty"`
+	Panes        []herdr.PaneSummary `json:"panes,omitempty"`
+	AgentState   string              `json:"agent_state,omitempty"`
+	Title        string              `json:"title,omitempty"`
+	HerdrOnline  bool                `json:"herdr_online"`
+	Clients      []ClientInfo        `json:"clients,omitempty"`
+	AuditLog     []AuditEntry        `json:"audit_log,omitempty"`
+	BannedIPs    []string            `json:"banned_ips,omitempty"`
+	PairingURL   string              `json:"pairing_url,omitempty"`
+	QRBase64     string              `json:"qr_base64,omitempty"`
+}
+
+func (s *Server) pollStatus() (herdr.AgentStatus, []herdr.AgentStatus, string, error) {
+	s.mu.RLock()
+	preferred := s.selectedPane
+	customProvider := s.statusProvider
+	s.mu.RUnlock()
+
+	if customProvider != nil {
+		st, err := customProvider()
+		var waiting []herdr.AgentStatus
+		if st.Waiting {
+			waiting = []herdr.AgentStatus{st}
+		}
+		return st, waiting, preferred, err
+	}
+	st, waiting, err := herdr.GetStatusWithPanes(preferred)
+	return st, waiting, preferred, err
+}
+
+func (s *Server) sendPaneAction(paneID, action string) error {
+	s.mu.RLock()
+	customPaneSender := s.actionPaneSender
+	customSender := s.actionSender
+	s.mu.RUnlock()
+
+	if customPaneSender != nil {
+		return customPaneSender(paneID, action)
+	}
+	if paneID == "" && customSender != nil {
+		return customSender(action)
+	}
+	if paneID != "" && customSender != nil && customPaneSender == nil {
+		// Preserve compatibility when a test only overrides actionSender
+		return customSender(action)
+	}
+	return herdr.SendActionToPane(paneID, action)
 }
 
 // StartMonitor polls statusProvider in the background and dispatches notifications
 // even when no browser or mobile WebSocket client is connected.
 func (s *Server) StartMonitor(stop <-chan struct{}) {
 	go herdr.WatchAgentBlocked(stop, func() {
-		status, _ := s.statusProvider()
-		s.dispatchStatus(status)
+		_, waiting, _, _ := s.pollStatus()
+		s.dispatchWaitingStatuses(waiting)
 	})
 
 	ticker := time.NewTicker(s.cfg.PollInterval)
 	defer ticker.Stop()
 
 	for {
-		status, _ := s.statusProvider()
-		s.dispatchStatus(status)
+		_, waiting, _, _ := s.pollStatus()
+		s.dispatchWaitingStatuses(waiting)
 
 		select {
 		case <-stop:
@@ -788,20 +828,25 @@ func (s *Server) StartMonitor(stop <-chan struct{}) {
 	}
 }
 
-func (s *Server) dispatchStatus(status herdr.AgentStatus) {
+func (s *Server) dispatchWaitingStatuses(waiting []herdr.AgentStatus) {
 	if s.cfg.Dispatcher == nil {
 		return
 	}
-	if status.Waiting {
-		s.cfg.Dispatcher.DispatchOnWaiting(true, notify.NotificationEvent{
-			Title:      "🛡️ Guaita: Approval Required",
-			Body:       status.Output,
-			PaneID:     status.PaneID,
-			PairingURL: s.BaseURL(),
+	events := make([]notify.NotificationEvent, 0, len(waiting))
+	baseURL := s.BaseURL()
+	for _, st := range waiting {
+		title := "🛡️ Guaita: Approval Required"
+		if st.PaneID != "" {
+			title = fmt.Sprintf("🛡️ Guaita [%s]: Approval Required", st.PaneID)
+		}
+		events = append(events, notify.NotificationEvent{
+			Title:      title,
+			Body:       st.Output,
+			PaneID:     st.PaneID,
+			PairingURL: baseURL,
 		})
-	} else {
-		s.cfg.Dispatcher.DispatchOnWaiting(false, notify.NotificationEvent{})
 	}
+	s.cfg.Dispatcher.SyncWaitingPanes(events)
 }
 
 // HandleWebSocket streams real-time status and telemetry to connected clients.
@@ -839,16 +884,18 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for {
-		status, _ := s.statusProvider()
-		s.dispatchStatus(status)
+		status, waiting, preferred, _ := s.pollStatus()
+		s.dispatchWaitingStatuses(waiting)
 
 		payload := wsPayload{
-			Output:      status.Output,
-			Waiting:     status.Waiting,
-			PaneID:      status.PaneID,
-			AgentState:  status.AgentState,
-			Title:       status.Title,
-			HerdrOnline: status.HerdrOnline,
+			Output:       status.Output,
+			Waiting:      status.Waiting,
+			PaneID:       status.PaneID,
+			SelectedPane: preferred,
+			Panes:        status.Panes,
+			AgentState:   status.AgentState,
+			Title:        status.Title,
+			HerdrOnline:  status.HerdrOnline,
 		}
 		if isLocal {
 			payload.Clients = s.hub.ListClients()
@@ -899,7 +946,7 @@ func sanitizeActionInput(raw string) (string, bool) {
 	return clean, true
 }
 
-// HandleAction receives actions from the web UI and forwards them to Herdr.
+// HandleAction receives actions from the web UI and forwards them to Herdr or tmux.
 func (s *Server) HandleAction(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePostAndSameOrigin(w, r) {
 		return
@@ -911,13 +958,18 @@ func (s *Server) HandleAction(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	_ = r.ParseForm()
 	action := r.FormValue("action")
+	paneID := strings.TrimSpace(r.FormValue("pane_id"))
 	if action == "" && r.Body != nil {
 		var payload struct {
 			Action string `json:"action"`
+			PaneID string `json:"pane_id"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&payload)
 		if payload.Action != "" {
 			action = payload.Action
+		}
+		if paneID == "" {
+			paneID = strings.TrimSpace(payload.PaneID)
 		}
 	}
 	if action != "" {
@@ -926,10 +978,52 @@ func (s *Server) HandleAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Bad Request: invalid or oversized action", http.StatusBadRequest)
 			return
 		}
-		s.RecordAudit(s.effectiveRemoteIP(r), "ACTION", clean)
-		_ = s.actionSender(clean)
+		if paneID == "" {
+			s.mu.RLock()
+			paneID = s.selectedPane
+			s.mu.RUnlock()
+		}
+		detail := clean
+		if paneID != "" {
+			detail = fmt.Sprintf("[%s] %s", paneID, clean)
+		}
+		s.RecordAudit(s.effectiveRemoteIP(r), "ACTION", detail)
+		_ = s.sendPaneAction(paneID, clean)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// HandleSelectPane pins the monitored pane (or clears selection for Auto mode).
+func (s *Server) HandleSelectPane(w http.ResponseWriter, r *http.Request) {
+	if !s.requirePostAndSameOrigin(w, r) {
+		return
+	}
+	if !s.checkRemoteAuth(w, r) {
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	_ = r.ParseForm()
+	paneID := strings.TrimSpace(r.FormValue("pane_id"))
+	if paneID == "" && r.Body != nil && strings.Contains(r.Header.Get("Content-Type"), "application/json") {
+		var payload struct {
+			PaneID string `json:"pane_id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		paneID = strings.TrimSpace(payload.PaneID)
+	}
+
+	s.mu.Lock()
+	s.selectedPane = paneID
+	s.mu.Unlock()
+
+	label := paneID
+	if label == "" {
+		label = "auto"
+	}
+	s.RecordAudit(s.effectiveRemoteIP(r), "PANE_SELECT", label)
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"selected_pane": paneID})
 }
 
 // HandleManifest serves the PWA manifest.
@@ -1126,8 +1220,12 @@ func (s *Server) HandleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tg := notify.NewTelegram(botToken, chatID, func(action string) {
-		_ = s.actionSender(action)
+	tg := notify.NewTelegram(botToken, chatID, func(rawAction string) {
+		if paneID, act, ok := notify.ParseTelegramAction(rawAction); ok && paneID != "" {
+			_ = s.sendPaneAction(paneID, act)
+			return
+		}
+		_ = s.sendPaneAction("", rawAction)
 	})
 	s.telegramNotifier = tg
 	s.cfg.TelegramEnabled = true

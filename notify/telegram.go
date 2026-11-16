@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,6 +45,20 @@ func (t *TelegramNotifier) Name() string {
 	return "telegram"
 }
 
+// ParseTelegramAction parses "approve", "reject", or "approve:<paneID>" / "reject:<paneID>".
+func ParseTelegramAction(raw string) (paneID, action string, ok bool) {
+	if raw == "approve" || raw == "reject" {
+		return "", raw, true
+	}
+	if strings.HasPrefix(raw, "approve:") {
+		return strings.TrimPrefix(raw, "approve:"), "approve", true
+	}
+	if strings.HasPrefix(raw, "reject:") {
+		return strings.TrimPrefix(raw, "reject:"), "reject", true
+	}
+	return "", "", false
+}
+
 // Close stops the background update poller.
 func (t *TelegramNotifier) Close() {
 	t.stopOnce.Do(func() {
@@ -67,10 +82,17 @@ func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 		html.EscapeString(body),
 	)
 
+	approveData := "approve"
+	rejectData := "reject"
+	if event.PaneID != "" && len("approve:"+event.PaneID) <= 64 {
+		approveData = "approve:" + event.PaneID
+		rejectData = "reject:" + event.PaneID
+	}
+
 	keyboard := [][]map[string]string{
 		{
-			{"text": "✓ APPROVE (Y)", "callback_data": "approve"},
-			{"text": "✕ REJECT (N)", "callback_data": "reject"},
+			{"text": "✓ APPROVE (Y)", "callback_data": approveData},
+			{"text": "✕ REJECT (N)", "callback_data": rejectData},
 		},
 	}
 
@@ -166,13 +188,17 @@ func (t *TelegramNotifier) pollUpdates() {
 						t.answerCallbackQuery(u.CallbackQuery.ID, "Unauthorized")
 						continue
 					}
-					action := u.CallbackQuery.Data
-					if action != "approve" && action != "reject" {
+					paneID, action, ok := ParseTelegramAction(u.CallbackQuery.Data)
+					if !ok {
 						t.answerCallbackQuery(u.CallbackQuery.ID, "Unsupported action")
 						continue
 					}
-					t.onAction(action)
-					t.answerCallbackQuery(u.CallbackQuery.ID, fmt.Sprintf("Action '%s' dispatched!", action))
+					t.onAction(u.CallbackQuery.Data)
+					if paneID != "" {
+						t.answerCallbackQuery(u.CallbackQuery.ID, fmt.Sprintf("Action '%s' sent to %s!", action, paneID))
+					} else {
+						t.answerCallbackQuery(u.CallbackQuery.ID, fmt.Sprintf("Action '%s' dispatched!", action))
+					}
 				}
 			}
 		}

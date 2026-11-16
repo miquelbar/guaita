@@ -248,3 +248,76 @@ func TestWebPushStore_ManifestAndSW(t *testing.T) {
 		t.Errorf("service worker should not be empty")
 	}
 }
+
+
+func TestDispatcher_SyncWaitingPanes(t *testing.T) {
+	d := NewDispatcher()
+	mock := &mockNotifier{}
+	d.Register(mock)
+
+	getCalls := func() int {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.calls
+	}
+
+	// Two distinct panes become waiting simultaneously -> 2 notifications
+	d.SyncWaitingPanes([]NotificationEvent{
+		{Title: "Pane 1", PaneID: "w1:p1"},
+		{Title: "Pane 2", PaneID: "w2:p1"},
+	})
+	time.Sleep(30 * time.Millisecond)
+	if getCalls() != 2 {
+		t.Fatalf("expected 2 notifications for 2 waiting panes, got %d", getCalls())
+	}
+
+	// Same 2 panes still waiting -> deduplicated (still 2)
+	d.SyncWaitingPanes([]NotificationEvent{
+		{Title: "Pane 1", PaneID: "w1:p1"},
+		{Title: "Pane 2", PaneID: "w2:p1"},
+	})
+	time.Sleep(30 * time.Millisecond)
+	if getCalls() != 2 {
+		t.Fatalf("expected deduplicated count 2, got %d", getCalls())
+	}
+
+	// w1:p1 resolved, w2:p1 still waiting -> still 2
+	d.SyncWaitingPanes([]NotificationEvent{
+		{Title: "Pane 2", PaneID: "w2:p1"},
+	})
+	time.Sleep(30 * time.Millisecond)
+	if getCalls() != 2 {
+		t.Fatalf("expected count 2 after w1:p1 resolved, got %d", getCalls())
+	}
+
+	// w1:p1 becomes waiting again -> fires 3rd notification
+	d.SyncWaitingPanes([]NotificationEvent{
+		{Title: "Pane 1", PaneID: "w1:p1"},
+		{Title: "Pane 2", PaneID: "w2:p1"},
+	})
+	time.Sleep(30 * time.Millisecond)
+	if getCalls() != 3 {
+		t.Fatalf("expected 3 notifications after w1:p1 re-blocked, got %d", getCalls())
+	}
+}
+
+func TestParseTelegramAction(t *testing.T) {
+	cases := []struct {
+		raw      string
+		wantPane string
+		wantAct  string
+		wantOK   bool
+	}{
+		{"approve", "", "approve", true},
+		{"reject", "", "reject", true},
+		{"approve:w1:p2", "w1:p2", "approve", true},
+		{"reject:%3", "%3", "reject", true},
+		{"drop-database", "", "", false},
+	}
+	for _, tc := range cases {
+		p, a, ok := ParseTelegramAction(tc.raw)
+		if p != tc.wantPane || a != tc.wantAct || ok != tc.wantOK {
+			t.Errorf("ParseTelegramAction(%q) = (%q, %q, %v), want (%q, %q, %v)", tc.raw, p, a, ok, tc.wantPane, tc.wantAct, tc.wantOK)
+		}
+	}
+}

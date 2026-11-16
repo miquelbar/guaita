@@ -21,17 +21,18 @@ type Notifier interface {
 	Notify(event NotificationEvent) error
 }
 
-// Dispatcher coordinates multi-channel delivery with state transition deduplication.
+// Dispatcher coordinates multi-channel delivery with per-pane state transition deduplication.
 type Dispatcher struct {
-	mu         sync.Mutex
-	notifiers  []Notifier
-	wasWaiting bool
+	mu            sync.Mutex
+	notifiers     []Notifier
+	waitingByPane map[string]bool
 }
 
 // NewDispatcher creates an empty notification dispatcher.
 func NewDispatcher() *Dispatcher {
 	return &Dispatcher{
-		notifiers: make([]Notifier, 0),
+		notifiers:     make([]Notifier, 0),
+		waitingByPane: make(map[string]bool),
 	}
 }
 
@@ -68,25 +69,62 @@ func (d *Dispatcher) Unregister(name string) {
 	d.notifiers = filtered
 }
 
-// DispatchOnWaiting dispatches notifications only on transition from non-waiting to waiting.
+func (d *Dispatcher) broadcast(event NotificationEvent) {
+	for _, n := range d.notifiers {
+		go func(target Notifier) {
+			if err := target.Notify(event); err != nil {
+				log.Printf("[%s] notification delivery failed: %v", target.Name(), err)
+			}
+		}(n)
+	}
+}
+
+// DispatchOnWaiting dispatches notifications only on transition from non-waiting to waiting for a pane.
 func (d *Dispatcher) DispatchOnWaiting(isWaiting bool, event NotificationEvent) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
+	key := event.PaneID
+	if key == "" {
+		key = "_default"
+	}
+
 	if isWaiting {
-		if !d.wasWaiting {
-			d.wasWaiting = true
-			// Broadcast asynchronously across all registered notifiers
-			for _, n := range d.notifiers {
-				go func(target Notifier) {
-					if err := target.Notify(event); err != nil {
-						log.Printf("[%s] notification delivery failed: %v", target.Name(), err)
-					}
-				}(n)
-			}
+		if !d.waitingByPane[key] {
+			d.waitingByPane[key] = true
+			d.broadcast(event)
 		}
 	} else {
-		d.wasWaiting = false
+		if key == "_default" {
+			d.waitingByPane = make(map[string]bool)
+		} else {
+			delete(d.waitingByPane, key)
+		}
+	}
+}
+
+// SyncWaitingPanes updates waiting state across all active panes simultaneously,
+// firing independent notifications for every newly blocked pane and clearing resolved ones.
+func (d *Dispatcher) SyncWaitingPanes(events []NotificationEvent) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	activeKeys := make(map[string]bool, len(events))
+	for _, ev := range events {
+		key := ev.PaneID
+		if key == "" {
+			key = "_default"
+		}
+		activeKeys[key] = true
+		if !d.waitingByPane[key] {
+			d.waitingByPane[key] = true
+			d.broadcast(ev)
+		}
+	}
+	for k := range d.waitingByPane {
+		if !activeKeys[k] {
+			delete(d.waitingByPane, k)
+		}
 	}
 }
 

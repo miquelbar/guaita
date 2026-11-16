@@ -230,8 +230,12 @@ func main() {
 	telegramActive := false
 	var tgNotifier *notify.TelegramNotifier
 	if *telegramToken != "" && *telegramChatID != "" {
-		tgNotifier = notify.NewTelegram(*telegramToken, *telegramChatID, func(action string) {
-			_ = herdr.SendAction(action)
+		tgNotifier = notify.NewTelegram(*telegramToken, *telegramChatID, func(rawAction string) {
+			if paneID, act, ok := notify.ParseTelegramAction(rawAction); ok && paneID != "" {
+				_ = herdr.SendActionToPane(paneID, act)
+				return
+			}
+			_ = herdr.SendAction(rawAction)
 		})
 		dispatcher.Register(tgNotifier)
 		telegramActive = true

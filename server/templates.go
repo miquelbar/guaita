@@ -367,9 +367,14 @@ const mobileTemplate = `<!DOCTYPE html>
                 <div id="connStatus" class="status-subtitle">● Connecting...</div>
             </div>
         </div>
-        <div class="view-toggle">
-            <button type="button" id="tabChat" class="toggle-btn active" data-view="chat">💬 Chat</button>
-            <button type="button" id="tabTerminal" class="toggle-btn" data-view="terminal">💻 Raw</button>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <select id="mobilePaneSelect" aria-label="Select session pane" style="background: var(--surface); color: var(--text); border: 1px solid var(--surface-border); border-radius: 8px; padding: 5px 8px; font-size: 0.72rem; max-width: 145px; outline: none;">
+                <option value="">Auto</option>
+            </select>
+            <div class="view-toggle">
+                <button type="button" id="tabChat" class="toggle-btn active" data-view="chat">💬 Chat</button>
+                <button type="button" id="tabTerminal" class="toggle-btn" data-view="terminal">💻 Raw</button>
+            </div>
         </div>
     </header>
 
@@ -432,6 +437,41 @@ const mobileTemplate = `<!DOCTYPE html>
     let wasWaiting = false;
     let lastOutput = '';
     let moveAgentAfterUser = false;
+    let currentPaneID = '';
+    const mobilePaneSelect = document.getElementById('mobilePaneSelect');
+
+    function renderMobilePanes(panes, selectedPane) {
+        if (!mobilePaneSelect || !panes) return;
+        const targetVal = selectedPane || '';
+        const prevSig = Array.from(mobilePaneSelect.options).map(o => o.value + '|' + o.textContent).join(';;');
+        const opts = [{ value: '', label: 'Auto (Blocked first)' }];
+        panes.forEach(p => {
+            const flag = p.waiting ? '⚠️ ' : '';
+            const title = p.title ? (' · ' + p.title) : '';
+            opts.push({ value: p.pane_id, label: flag + p.pane_id + title });
+        });
+        const nextSig = opts.map(o => o.value + '|' + o.label).join(';;');
+        if (prevSig !== nextSig) {
+            mobilePaneSelect.innerHTML = '';
+            opts.forEach(o => {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.label;
+                mobilePaneSelect.appendChild(opt);
+            });
+        }
+        mobilePaneSelect.value = targetVal;
+    }
+
+    if (mobilePaneSelect) {
+        mobilePaneSelect.addEventListener('change', () => {
+            fetch('/api/panes/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ pane_id: mobilePaneSelect.value })
+            });
+        });
+    }
 
     function nowTimeStr() {
         return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -511,6 +551,12 @@ const mobileTemplate = `<!DOCTYPE html>
                     rawTerminal.scrollTop = rawTerminal.scrollHeight;
                 }
 
+                if (data.pane_id) {
+                    currentPaneID = data.pane_id;
+                }
+                if (data.panes) {
+                    renderMobilePanes(data.panes, data.selected_pane);
+                }
                 if (data.waiting) {
                     approvalCard.style.display = 'block';
                     if (!wasWaiting) {
@@ -548,12 +594,16 @@ const mobileTemplate = `<!DOCTYPE html>
         if (displayLabel) {
             appendUserMessage(displayLabel);
         }
+        const params = { action: action };
+        if (currentPaneID) {
+            params.pane_id = currentPaneID;
+        }
         fetch('/action', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded'
             },
-            body: new URLSearchParams({action: action})
+            body: new URLSearchParams(params)
         }).then(res => {
             if (!res.ok) {
                 console.error('Action failed:', res.status);
@@ -1105,9 +1155,14 @@ const adminTemplate = `<!DOCTYPE html>
                             <div id="paneBadge" style="font-size: 0.72rem; color: var(--accent);">Target: Auto-detecting pane...</div>
                         </div>
                     </div>
-                    <div class="view-pill">
-                        <button id="btnAdminChat" class="btn-view-toggle active" data-admin-view="chat">💬 Chat</button>
-                        <button id="btnAdminTerm" class="btn-view-toggle" data-admin-view="term">💻 Raw</button>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <select id="adminPaneSelect" aria-label="Select session pane" style="background: var(--bg); color: var(--text); border: 1px solid var(--surface-border); border-radius: 8px; padding: 6px 10px; font-size: 0.76rem; max-width: 240px; outline: none;">
+                            <option value="">Auto (Blocked first)</option>
+                        </select>
+                        <div class="view-pill">
+                            <button id="btnAdminChat" class="btn-view-toggle active" data-admin-view="chat">💬 Chat</button>
+                            <button id="btnAdminTerm" class="btn-view-toggle" data-admin-view="term">💻 Raw</button>
+                        </div>
                     </div>
                 </div>
 
@@ -1279,6 +1334,41 @@ const adminTemplate = `<!DOCTYPE html>
     let adminLastOutput = '';
     let adminWasWaiting = false;
     let adminMoveAgentAfterUser = false;
+    let adminCurrentPaneID = '';
+    const adminPaneSelect = document.getElementById('adminPaneSelect');
+
+    function renderAdminPanes(panes, selectedPane) {
+        if (!adminPaneSelect || !panes) return;
+        const targetVal = selectedPane || '';
+        const prevSig = Array.from(adminPaneSelect.options).map(o => o.value + '|' + o.textContent).join(';;');
+        const opts = [{ value: '', label: 'Auto (Blocked first)' }];
+        panes.forEach(p => {
+            const flag = p.waiting ? '⚠️ ' : '';
+            const title = p.title ? (' · ' + p.title) : '';
+            opts.push({ value: p.pane_id, label: flag + p.pane_id + title });
+        });
+        const nextSig = opts.map(o => o.value + '|' + o.label).join(';;');
+        if (prevSig !== nextSig) {
+            adminPaneSelect.innerHTML = '';
+            opts.forEach(o => {
+                const opt = document.createElement('option');
+                opt.value = o.value;
+                opt.textContent = o.label;
+                adminPaneSelect.appendChild(opt);
+            });
+        }
+        adminPaneSelect.value = targetVal;
+    }
+
+    if (adminPaneSelect) {
+        adminPaneSelect.addEventListener('change', () => {
+            fetch('/api/panes/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: new URLSearchParams({ pane_id: adminPaneSelect.value })
+            });
+        });
+    }
 
     function nowTimeStr() {
         return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -1345,7 +1435,11 @@ const adminTemplate = `<!DOCTYPE html>
                 }
 
                 if (data.pane_id) {
+                    adminCurrentPaneID = data.pane_id;
                     paneBadge.innerText = ` + "`" + `Active Pane: ${data.pane_id} • Status: ${data.agent_state || 'ready'}` + "`" + `;
+                }
+                if (data.panes) {
+                    renderAdminPanes(data.panes, data.selected_pane);
                 }
 
                 if (data.waiting) {
@@ -1598,10 +1692,14 @@ const adminTemplate = `<!DOCTYPE html>
 
     function sendAction(action) {
         appendUserMessage(action.toUpperCase());
+        const params = { action: action };
+        if (adminCurrentPaneID) {
+            params.pane_id = adminCurrentPaneID;
+        }
         fetch('/action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams({action: action})
+            body: new URLSearchParams(params)
         });
     }
 
