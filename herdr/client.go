@@ -18,6 +18,8 @@ type PaneSummary struct {
 	Agent      string `json:"agent,omitempty"`
 	AgentState string `json:"agent_state,omitempty"`
 	Waiting    bool   `json:"waiting"`
+	PromptType string `json:"prompt_type,omitempty"`
+	PromptText string `json:"prompt_text,omitempty"`
 	Focused    bool   `json:"focused,omitempty"`
 	Backend    string `json:"backend,omitempty"`
 }
@@ -26,6 +28,8 @@ type PaneSummary struct {
 type AgentStatus struct {
 	Output      string        `json:"output"`
 	Waiting     bool          `json:"waiting"`
+	PromptType  string        `json:"prompt_type,omitempty"`
+	PromptText  string        `json:"prompt_text,omitempty"`
 	PaneID      string        `json:"pane_id,omitempty"`
 	AgentState  string        `json:"agent_state,omitempty"`
 	Title       string        `json:"title,omitempty"`
@@ -110,7 +114,25 @@ type paneListOutput struct {
 	} `json:"result"`
 }
 
-var promptRegex = regexp.MustCompile(`(?i)(\([yY]/[nN]\)|\[[yY]/[nN]\]|\[[yY]\]es|proceed\?|are you sure\??|press enter|enter to confirm|esc to cancel|allow once|allow always|allow this|yes,\s*allow|do you want to (run|execute|allow|create|edit|proceed))`)
+var (
+	promptRegex              = regexp.MustCompile(`(?i)(\([yY]/[nN]\)|\[[yY]/[nN]\]|\([yY]es/[nN]o\)|\[[yY]es/[nN]o\]|\[[yY]\]es|proceed\?|are you sure\??|press enter|enter to confirm|esc to cancel|allow once|allow always|always allow|allow this|yes,\s*allow|do you want to (run|execute|allow|create|edit|delete|proceed)|approval required)`)
+	yesNoChoiceRegex         = regexp.MustCompile(`(?i)(\([yY]/[nN]\)|\[[yY]/[nN]\]|\([yY]es/[nN]o\)|\[[yY]es/[nN]o\]|\[[yY]\]es|proceed\?|are you sure\??|allow once|allow always|always allow|allow this|yes,\s*allow|do you want to (run|execute|allow|create|edit|delete|proceed)|approval required|\b[123]\.\s*(yes|no|allow|always allow|approve|reject|confirm|cancel)\b)`)
+	numberedMenuOptionRegex  = regexp.MustCompile(`^[>❯›»*]?\s*\d+\.\s+\S+`)
+	inputPromptRegex         = regexp.MustCompile(`(?i)(^(please\s+|por\s+favor\s+)?(enter|type|input|specify|provide|write|escribe|introduce|indica|ingresa|especifica)\b[^.!?\n]{2,90}[:?]\s*$|\b(enter|type|input|specify|provide|write|escribe|introduce|indica|ingresa|especifica)\s+(your|the|a|an|tu|el|la|los|las|un|una)\s+[^.!?\n]{2,70}[:?]\s*$)`)
+	shellPromptRegex         = regexp.MustCompile(`(\S+@\S+.*[%$#]\s*$|^[\w.-]+:\S*\s*[%$#]\s*$|^bash-[0-9.]+[$#]\s*$)`)
+	tuiBorderRegex           = regexp.MustCompile(`^[\s─━═╌╍┄┅┈┉╭╮╯╰┌┐┘└├┤┬┴┼│┃║\-_=*]+$`)
+	tuiInputPlaceholderRegex = regexp.MustCompile(`(?i)^[│┃║]?\s*[>❯›»]\s*(type a message.*|reply.*|send a message.*|ask anything.*|enter a prompt.*)?\s*[│┃║]?$`)
+	tuiFooterHintRegex       = regexp.MustCompile(`(?i)^\s*(\?\s+for\s+shortcuts|shift\+tab\b|ctrl\+[cd]\s+to\b|esc\s+to\s+interrupt\b|context:\s*\d+%|tokens:\s*\d+)`)
+)
+
+func isTUIChromeLine(line string) bool {
+	if line == "" {
+		return true
+	}
+	return tuiBorderRegex.MatchString(line) ||
+		tuiInputPlaceholderRegex.MatchString(line) ||
+		tuiFooterHintRegex.MatchString(line)
+}
 
 func lastNonEmptyLines(text string, maxLines int) string {
 	rawLines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
@@ -121,7 +143,153 @@ func lastNonEmptyLines(text string, maxLines int) string {
 			collected = append(collected, trimmed)
 		}
 	}
+	for i, j := 0, len(collected)-1; i < j; i, j = i+1, j-1 {
+		collected[i], collected[j] = collected[j], collected[i]
+	}
 	return strings.Join(collected, "\n")
+}
+
+func tailSliceJoin(lines []string, maxLines int) string {
+	if len(lines) == 0 || maxLines <= 0 {
+		return ""
+	}
+	start := len(lines) - maxLines
+	if start < 0 {
+		start = 0
+	}
+	return strings.Join(lines[start:], "\n")
+}
+
+func isQuestionLine(line string) bool {
+	cleaned := strings.TrimSpace(strings.TrimRight(line, "\"'”’)*_` "))
+	if len(cleaned) < 4 || !strings.HasSuffix(cleaned, "?") {
+		return false
+	}
+	lower := strings.ToLower(cleaned)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return false
+	}
+	return true
+}
+
+func extractQuestionBlock(contentLines []string) string {
+	if len(contentLines) == 0 {
+		return ""
+	}
+	n := len(contentLines)
+	start := n - 1
+	// Include up to 2 preceding lines if they are part of a multi-line question or numbered options
+	for start > 0 && (n-start) < 4 {
+		prev := contentLines[start-1]
+		if shellPromptRegex.MatchString(prev) {
+			break
+		}
+		if numberedMenuOptionRegex.MatchString(contentLines[start]) ||
+			numberedMenuOptionRegex.MatchString(prev) ||
+			isQuestionLine(prev) ||
+			(!strings.HasSuffix(prev, ".") && len(prev) > 20) {
+			start--
+		} else {
+			break
+		}
+	}
+	return strings.Join(contentLines[start:], "\n")
+}
+
+// analyzePrompt inspects terminal output and agent state to determine whether the agent is waiting,
+// whether the prompt is a Yes/No confirmation ("confirm") or an open question/input ("question"),
+// and extracts the highlighted prompt text.
+func analyzePrompt(outputText, agentState string, initiallyWaiting bool) (bool, string, string) {
+	trimmedOut := strings.TrimSpace(outputText)
+	if trimmedOut == "" ||
+		strings.HasPrefix(trimmedOut, "Terminal active (waiting for") ||
+		strings.HasPrefix(trimmedOut, "⚡ Herdr") {
+		if initiallyWaiting {
+			return true, "confirm", ""
+		}
+		return false, "", ""
+	}
+
+	rawLines := strings.Split(strings.ReplaceAll(outputText, "\r\n", "\n"), "\n")
+	nonEmpty := make([]string, 0, len(rawLines))
+	for _, l := range rawLines {
+		t := strings.TrimSpace(l)
+		if t != "" {
+			nonEmpty = append(nonEmpty, t)
+		}
+	}
+	if len(nonEmpty) == 0 {
+		if initiallyWaiting {
+			return true, "confirm", ""
+		}
+		return false, "", ""
+	}
+
+	// If sitting at an OS shell prompt and not reported blocked by Herdr, it is not waiting on an agent prompt.
+	if !initiallyWaiting && shellPromptRegex.MatchString(nonEmpty[len(nonEmpty)-1]) {
+		return false, "", ""
+	}
+
+	// Strip trailing TUI chrome (borders, empty input prompt `❯`, shortcut hints) from the bottom.
+	contentEnd := len(nonEmpty)
+	for contentEnd > 0 && isTUIChromeLine(nonEmpty[contentEnd-1]) {
+		contentEnd--
+	}
+	contentLines := nonEmpty[:contentEnd]
+	if len(contentLines) == 0 {
+		if initiallyWaiting {
+			return true, "confirm", tailSliceJoin(nonEmpty, 3)
+		}
+		return false, "", ""
+	}
+
+	lastContent := contentLines[len(contentLines)-1]
+	if !initiallyWaiting && shellPromptRegex.MatchString(lastContent) {
+		return false, "", ""
+	}
+
+	tail6 := tailSliceJoin(nonEmpty, 6)
+	contentTail5 := tailSliceJoin(contentLines, 5)
+
+	// 1. Check for confirmation / TUI menu prompt
+	if promptRegex.MatchString(tail6) {
+		// Distinguish a Yes/No confirmation from a multiple-choice question menu
+		hasNumberedOpts := false
+		for _, l := range contentLines[max(0, len(contentLines)-5):] {
+			if numberedMenuOptionRegex.MatchString(l) {
+				hasNumberedOpts = true
+				break
+			}
+		}
+		if hasNumberedOpts && !yesNoChoiceRegex.MatchString(tail6) {
+			return true, "question", contentTail5
+		}
+		return true, "confirm", contentTail5
+	}
+
+	// 2. Check for explicit text-input prompt (e.g. "Enter file path:", "Escribe el nombre:")
+	if inputPromptRegex.MatchString(lastContent) {
+		return true, "question", extractQuestionBlock(contentLines)
+	}
+
+	// 3. Check for conversational or interactive question when the agent is not actively streaming ("working")
+	if agentState != "working" || initiallyWaiting {
+		if isQuestionLine(lastContent) {
+			return true, "question", extractQuestionBlock(contentLines)
+		}
+	}
+
+	// 4. If Herdr explicitly reported the agent as blocked, inspect recent lines for question vs confirm
+	if initiallyWaiting {
+		for i := len(contentLines) - 1; i >= 0 && i >= len(contentLines)-4; i-- {
+			if isQuestionLine(contentLines[i]) || inputPromptRegex.MatchString(contentLines[i]) {
+				return true, "question", contentTail5
+			}
+		}
+		return true, "confirm", contentTail5
+	}
+
+	return false, "", ""
 }
 
 // GetStatus checks the current status of Herdr or returns a defensive fallback when inactive.
@@ -166,7 +334,7 @@ func GetStatusWithPanes(preferredPane string) (AgentStatus, []AgentStatus, error
 		}
 	}
 
-	// 2. Prefer native `herdr agent list` for direct agent telemetry (agy, claude, etc.)
+	// 2. Query native `herdr agent list` for direct agent telemetry (agy, claude, etc.)
 	panes := make([]PaneSummary, 0)
 	metaMap := make(map[string]paneMeta)
 
@@ -192,41 +360,77 @@ func GetStatusWithPanes(preferredPane string) (AgentStatus, []AgentStatus, error
 		}
 	}
 
-	// 2b. Fallback to `herdr pane list` if no active agents were returned
+	// 2b. Merge or fallback to `herdr pane list` so non-registered panes are also monitored
+	cmdPanes := execCommand(bin, "pane", "list")
+	panesRaw, panesErr := cmdPanes.Output()
+	if panesErr == nil {
+		var panesData paneListOutput
+		if json.Unmarshal(panesRaw, &panesData) == nil {
+			for _, p := range panesData.Result.Panes {
+				if _, exists := metaMap[p.PaneID]; exists {
+					continue
+				}
+				panes = append(panes, PaneSummary{
+					PaneID:     p.PaneID,
+					Title:      p.TerminalTitle,
+					AgentState: p.AgentStatus,
+					Waiting:    p.AgentStatus == "blocked",
+					Focused:    p.Focused,
+					Backend:    "herdr",
+				})
+				metaMap[p.PaneID] = paneMeta{isAgent: false, backend: "herdr"}
+			}
+		}
+	}
+
 	if len(panes) == 0 {
-		cmdPanes := execCommand(bin, "pane", "list")
-		panesRaw, err := cmdPanes.Output()
-		if err != nil {
+		if panesErr != nil {
 			return AgentStatus{
 				Output:      "⚡ Herdr server running (no active panes found)",
 				Waiting:     false,
 				HerdrOnline: true,
 			}, nil, nil
 		}
+		return AgentStatus{
+			Output:      "⚡ Herdr server running (no active panes)",
+			Waiting:     false,
+			HerdrOnline: true,
+		}, nil, nil
+	}
 
-		var panesData paneListOutput
-		if err := json.Unmarshal(panesRaw, &panesData); err != nil || len(panesData.Result.Panes) == 0 {
-			return AgentStatus{
-				Output:      "⚡ Herdr server running (no active panes)",
-				Waiting:     false,
-				HerdrOnline: true,
-			}, nil, nil
+	readPane := func(id string) string {
+		raw, _ := execCommand(bin, "pane", "read", id, "--source", "recent-unwrapped", "--lines", "80").Output()
+		return string(raw)
+	}
+
+	// 3. Read and analyze all panes so prompts/questions on unfocused panes are always detected and notified
+	outputs := make(map[string]string, len(panes))
+	waitingStatuses := make([]AgentStatus, 0)
+	for i := range panes {
+		pOut := readPane(panes[i].PaneID)
+		if strings.TrimSpace(pOut) == "" {
+			pOut = "Terminal active (waiting for agent activity in pane " + panes[i].PaneID + ")"
 		}
-
-		for _, p := range panesData.Result.Panes {
-			panes = append(panes, PaneSummary{
-				PaneID:     p.PaneID,
-				Title:      p.TerminalTitle,
-				AgentState: p.AgentStatus,
-				Waiting:    p.AgentStatus == "blocked",
-				Focused:    p.Focused,
-				Backend:    "herdr",
+		outputs[panes[i].PaneID] = pOut
+		isWait, pType, pText := analyzePrompt(pOut, panes[i].AgentState, panes[i].Waiting)
+		panes[i].Waiting = isWait
+		panes[i].PromptType = pType
+		panes[i].PromptText = pText
+		if isWait {
+			waitingStatuses = append(waitingStatuses, AgentStatus{
+				Output:      pOut,
+				Waiting:     true,
+				PromptType:  pType,
+				PromptText:  pText,
+				PaneID:      panes[i].PaneID,
+				AgentState:  panes[i].AgentState,
+				Title:       panes[i].Title,
+				HerdrOnline: true,
 			})
-			metaMap[p.PaneID] = paneMeta{isAgent: false, backend: "herdr"}
 		}
 	}
 
-	// Pick selected pane: preferredPane -> first waiting/blocked -> focused -> first
+	// 4. Pick selected pane: preferredPane -> first waiting/blocked -> focused -> first
 	selectedIdx := 0
 	foundPreferred := false
 	if preferredPane != "" {
@@ -265,46 +469,11 @@ func GetStatusWithPanes(preferredPane string) (AgentStatus, []AgentStatus, error
 	}
 	activePaneMu.Unlock()
 
-	readPane := func(id string) string {
-		raw, _ := execCommand(bin, "pane", "read", id, "--source", "recent-unwrapped", "--lines", "80").Output()
-		return string(raw)
-	}
-
-	// 3. Read selected pane output and any other waiting/blocked panes for independent alerts
-	outputText := readPane(selected.PaneID)
-	if strings.TrimSpace(outputText) == "" {
-		outputText = "Terminal active (waiting for agent activity in pane " + selected.PaneID + ")"
-	}
-
-	isWaiting := selected.Waiting
-	if !isWaiting && promptRegex.MatchString(lastNonEmptyLines(outputText, 6)) {
-		isWaiting = true
-		panes[selectedIdx].Waiting = true
-	}
-
-	waitingStatuses := make([]AgentStatus, 0)
-	for i := range panes {
-		p := panes[i]
-		if !p.Waiting {
-			continue
-		}
-		pOut := outputText
-		if p.PaneID != selected.PaneID {
-			pOut = readPane(p.PaneID)
-		}
-		waitingStatuses = append(waitingStatuses, AgentStatus{
-			Output:      pOut,
-			Waiting:     true,
-			PaneID:      p.PaneID,
-			AgentState:  p.AgentState,
-			Title:       p.Title,
-			HerdrOnline: true,
-		})
-	}
-
 	return AgentStatus{
-		Output:      outputText,
-		Waiting:     isWaiting,
+		Output:      outputs[selected.PaneID],
+		Waiting:     selected.Waiting,
+		PromptType:  selected.PromptType,
+		PromptText:  selected.PromptText,
 		PaneID:      selected.PaneID,
 		AgentState:  selected.AgentState,
 		Title:       selected.Title,
@@ -444,14 +613,16 @@ func getTmuxStatus(preferredPane string) (AgentStatus, []AgentStatus, bool) {
 		if strings.TrimSpace(outputText) == "" {
 			outputText = "Terminal active (waiting for activity in tmux pane " + id + ")"
 		}
-		isWaiting := promptRegex.MatchString(lastNonEmptyLines(outputText, 6))
 		state := "tmux"
+		isWaiting, promptType, promptText := analyzePrompt(outputText, state, false)
 
 		panes = append(panes, PaneSummary{
 			PaneID:     id,
 			Title:      title,
 			AgentState: state,
 			Waiting:    isWaiting,
+			PromptType: promptType,
+			PromptText: promptText,
 			Focused:    focused,
 			Backend:    "tmux",
 		})
@@ -461,6 +632,8 @@ func getTmuxStatus(preferredPane string) (AgentStatus, []AgentStatus, bool) {
 			waitingStatuses = append(waitingStatuses, AgentStatus{
 				Output:      outputText,
 				Waiting:     true,
+				PromptType:  promptType,
+				PromptText:  promptText,
 				PaneID:      id,
 				AgentState:  state,
 				Title:       title,
@@ -512,6 +685,8 @@ func getTmuxStatus(preferredPane string) (AgentStatus, []AgentStatus, bool) {
 	return AgentStatus{
 		Output:      outputs[selected.PaneID],
 		Waiting:     selected.Waiting,
+		PromptType:  selected.PromptType,
+		PromptText:  selected.PromptText,
 		PaneID:      selected.PaneID,
 		AgentState:  selected.AgentState,
 		Title:       selected.Title,

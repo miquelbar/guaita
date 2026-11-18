@@ -513,3 +513,81 @@ func TestHandleSelectPane_AndPaneRouting(t *testing.T) {
 		t.Errorf("expected explicit pane override (%%3, reject), got (%q, %q)", gotPane, gotAction)
 	}
 }
+
+func TestHandleWebSocket_StreamsPromptTypeAndQuestionHighlight(t *testing.T) {
+	srv := New(Config{
+		SessionToken: "secret123",
+		SessionDays:  7,
+		PollInterval: 10 * time.Millisecond,
+	})
+	srv.statusProvider = func() (herdr.AgentStatus, error) {
+		return herdr.AgentStatus{
+			Output:      "Which environment should we deploy to?",
+			Waiting:     true,
+			PromptType:  "question",
+			PromptText:  "Which environment should we deploy to?",
+			AgentState:  "idle",
+			PaneID:      "w1:p1",
+			HerdrOnline: true,
+		}, nil
+	}
+
+	listener := newMemoryListener()
+	defer listener.Close()
+
+	httpServer := &http.Server{Handler: srv.Routes()}
+	go func() {
+		_ = httpServer.Serve(listener)
+	}()
+	defer httpServer.Close()
+
+	dialer := &websocket.Dialer{
+		NetDial: func(network, addr string) (net.Conn, error) {
+			serverConn, clientConn := net.Pipe()
+			wrappedServerConn := &pipeAddrConn{
+				Conn:       serverConn,
+				remoteAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 54321},
+			}
+			listener.conns <- wrappedServerConn
+			return clientConn, nil
+		},
+	}
+
+	conn, _, err := dialer.Dial("ws://localhost/ws", nil)
+	if err != nil {
+		t.Fatalf("unexpected WS dial error: %v", err)
+	}
+	defer conn.Close()
+
+	var payload wsPayload
+	if err := conn.ReadJSON(&payload); err != nil {
+		t.Fatalf("failed to read JSON from websocket: %v", err)
+	}
+	if !payload.Waiting || payload.PromptType != "question" {
+		t.Errorf("expected waiting question payload, got waiting=%v type=%q", payload.Waiting, payload.PromptType)
+	}
+	if payload.PromptText != "Which environment should we deploy to?" {
+		t.Errorf("unexpected prompt_text: %q", payload.PromptText)
+	}
+
+	// Verify mobile and admin HTML templates include state banners, question quote boxes, and scroll tracker
+	mobileHTML := RenderMobileHTMLWithNonce(7, "testnonce")
+	if strings.Contains(mobileHTML, "%!") {
+		t.Errorf("mobileHTML contains broken fmt.Sprintf verb")
+	}
+	for _, needle := range []string{"agentStateBanner", "promptQuoteMobile", "questionPillsMobile", "createScrollTracker"} {
+		if !strings.Contains(mobileHTML, needle) {
+			t.Errorf("expected mobileHTML to contain %q", needle)
+		}
+	}
+
+	adminHTML := RenderAdminHTML(AdminPageData{SessionDays: 7, CSPNonce: "testnonce"})
+	if strings.Contains(adminHTML, "%!") {
+		t.Errorf("adminHTML contains broken fmt.Sprintf verb")
+	}
+	for _, needle := range []string{"adminStateBanner", "promptQuoteAdmin", "questionActionsAdmin", "createAdminScrollTracker"} {
+		if !strings.Contains(adminHTML, needle) {
+			t.Errorf("expected adminHTML to contain %q", needle)
+		}
+	}
+}

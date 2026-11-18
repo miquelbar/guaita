@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -87,11 +88,23 @@ func TestHelperProcess(t *testing.T) {
 				fmt.Print(`{"result":{"panes":[{"pane_id":"w1:p1","agent_status":"blocked","focused":true,"terminal_title":"agent-pane"}]}}`)
 			case "pattern_prompt":
 				fmt.Print(`{"result":{"panes":[{"pane_id":"w1:p1","agent_status":"working","focused":true,"terminal_title":"agent-pane"}]}}`)
+			case "unfocused_pane_prompt":
+				fmt.Print(`{"result":{"panes":[{"pane_id":"w1:p1","agent_status":"idle","focused":true,"terminal_title":"shell"},{"pane_id":"w1:p2","agent_status":"idle","focused":false,"terminal_title":"agy"}]}}`)
 			default:
 				fmt.Print(`{"result":{"panes":[{"pane_id":"w1:p1","agent_status":"idle","focused":true,"terminal_title":"agent-pane"}]}}`)
 			}
 		case "read":
+			targetPane := ""
+			if len(args) > 3 {
+				targetPane = args[3]
+			}
 			switch mode {
+			case "unfocused_pane_prompt":
+				if targetPane == "w1:p2" {
+					fmt.Print("Allow editing /tmp/a?\n❯ 1. Yes\n  2. Always allow\n  3. No\nEnter to confirm · Esc to cancel")
+				} else {
+					fmt.Print("miquel@mac ~ %")
+				}
 			case "pattern_prompt":
 				fmt.Print(`Do you want to apply these changes? (y/n)`)
 			case "old_scrollback":
@@ -293,5 +306,105 @@ func TestSendAction(t *testing.T) {
 				t.Errorf("SendAction(%q) failed: %v", action, err)
 			}
 		})
+	}
+}
+
+func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
+	cases := []struct {
+		name             string
+		output           string
+		agentState       string
+		initiallyWaiting bool
+		wantWaiting      bool
+		wantType         string
+		wantTextContains string
+	}{
+		{
+			name:             "open question in idle agent with TUI chrome at bottom",
+			output:           "Processed command.\n¿Querías ejecutar agy -i en una nueva sesión desde tu terminal, o necesitas que haga algo adicional aquí?\n────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      true,
+			wantType:         "question",
+			wantTextContains: "¿Querías ejecutar agy -i",
+		},
+		{
+			name:             "explicit input prompt with colon",
+			output:           "Initializing project...\nPlease enter the target output file path:",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      true,
+			wantType:         "question",
+			wantTextContains: "Please enter the target output file path:",
+		},
+		{
+			name:             "multiple choice non-yes-no question menu",
+			output:           "Which database engine should we configure?\n❯ 1. PostgreSQL\n  2. SQLite\n  3. Redis\nEnter to confirm · Esc to cancel",
+			agentState:       "blocked",
+			initiallyWaiting: true,
+			wantWaiting:      true,
+			wantType:         "question",
+			wantTextContains: "Which database engine should we configure?",
+		},
+		{
+			name:             "yes/no TUI confirmation menu",
+			output:           "Allow editing /tmp/a?\n❯ 1. Yes\n  2. Always allow\n  3. No\nEnter to confirm · Esc to cancel",
+			agentState:       "blocked",
+			initiallyWaiting: true,
+			wantWaiting:      true,
+			wantType:         "confirm",
+			wantTextContains: "Allow editing /tmp/a?",
+		},
+		{
+			name:             "normal idle completion statement",
+			output:           "Se ha creado el archivo /tmp/b con el contenido hola.\n────────────────────\n❯ \n  ? for shortcuts",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      false,
+			wantType:         "",
+			wantTextContains: "",
+		},
+		{
+			name:             "streaming question while agent is actively working",
+			output:           "Thinking about: What is the best approach?",
+			agentState:       "working",
+			initiallyWaiting: false,
+			wantWaiting:      false,
+			wantType:         "",
+			wantTextContains: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotWait, gotType, gotText := analyzePrompt(tc.output, tc.agentState, tc.initiallyWaiting)
+			if gotWait != tc.wantWaiting {
+				t.Errorf("waiting = %v, want %v (type=%q, text=%q)", gotWait, tc.wantWaiting, gotType, gotText)
+			}
+			if gotType != tc.wantType {
+				t.Errorf("promptType = %q, want %q", gotType, tc.wantType)
+			}
+			if tc.wantTextContains != "" && !strings.Contains(gotText, tc.wantTextContains) {
+				t.Errorf("promptText = %q, expected to contain %q", gotText, tc.wantTextContains)
+			}
+		})
+	}
+}
+
+func TestGetStatusWithPanes_DetectsUnfocusedWaitingPaneForAlerts(t *testing.T) {
+	oldExec := execCommand
+	defer func() { execCommand = oldExec }()
+	execCommand = fakeExecCommand
+
+	t.Setenv("TEST_HERDR_MODE", "unfocused_pane_prompt")
+	status, waitingList, err := GetStatusWithPanes("")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !status.Waiting || status.PaneID != "w1:p2" {
+		t.Fatalf("expected auto-selection of unfocused waiting pane w1:p2, got waiting=%v pane=%q", status.Waiting, status.PaneID)
+	}
+	if len(waitingList) != 1 || waitingList[0].PaneID != "w1:p2" {
+		t.Fatalf("expected waitingStatuses to include unfocused pane w1:p2 for background alerts, got %+v", waitingList)
 	}
 }

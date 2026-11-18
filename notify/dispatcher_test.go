@@ -440,3 +440,56 @@ func TestParseTelegramAction(t *testing.T) {
 		}
 	}
 }
+
+type flakyNotifier struct {
+	mu       sync.Mutex
+	attempts int
+	failTime int
+}
+
+func (f *flakyNotifier) Name() string { return "flaky" }
+func (f *flakyNotifier) Notify(e NotificationEvent) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attempts++
+	if f.attempts <= f.failTime {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+
+func TestDispatcher_RetriesFailedDeliveryAndNewPromptKey(t *testing.T) {
+	d := NewDispatcher()
+	flaky := &flakyNotifier{failTime: 1}
+	d.Register(flaky)
+
+	ev1 := NotificationEvent{PaneID: "w1:p2", PromptKey: "confirm:Allow file A?", Body: "Allow file A?"}
+	// First poll fails delivery
+	d.SyncWaitingPanes([]NotificationEvent{ev1})
+	time.Sleep(30 * time.Millisecond)
+
+	// Second poll retries and succeeds
+	d.SyncWaitingPanes([]NotificationEvent{ev1})
+	time.Sleep(30 * time.Millisecond)
+
+	// Third poll with same promptKey is deduplicated
+	d.SyncWaitingPanes([]NotificationEvent{ev1})
+	time.Sleep(30 * time.Millisecond)
+
+	flaky.mu.Lock()
+	if flaky.attempts != 2 {
+		t.Fatalf("expected 2 attempts (1 fail + 1 retry), got %d", flaky.attempts)
+	}
+	flaky.mu.Unlock()
+
+	// New promptKey on the same pane while still waitingPending triggers a new notification
+	ev2 := NotificationEvent{PaneID: "w1:p2", PromptKey: "question:What file name?", Body: "What file name?"}
+	d.SyncWaitingPanes([]NotificationEvent{ev2})
+	time.Sleep(30 * time.Millisecond)
+
+	flaky.mu.Lock()
+	if flaky.attempts != 3 {
+		t.Fatalf("expected 3rd delivery on new PromptKey, got %d", flaky.attempts)
+	}
+	flaky.mu.Unlock()
+}

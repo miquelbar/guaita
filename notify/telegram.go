@@ -91,19 +91,29 @@ func (t *TelegramNotifier) BeginPending(paneID string) {
 	delete(t.resolved, key)
 }
 
+func truncateRunesTail(s string, maxRunes int) string {
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[len(runes)-maxRunes:])
+}
+
 // Notify sends an alert message with inline buttons to the configured Telegram chat.
 func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 	if t.Token == "" || t.ChatID == "" {
 		return nil
 	}
 
-	body := event.Body
-	if len(body) > 3000 {
-		body = body[len(body)-3000:]
+	body := truncateRunesTail(event.Body, 2200)
+
+	headerLine := fmt.Sprintf("Agent in pane <code>%s</code> is paused awaiting human approval:", html.EscapeString(event.PaneID))
+	if strings.Contains(strings.ToLower(event.Title), "question") {
+		headerLine = fmt.Sprintf("Agent in pane <code>%s</code> asked a question and is waiting for your reply:", html.EscapeString(event.PaneID))
 	}
 
-	messageText := fmt.Sprintf("🛡️ <b>Guaita Sentinel Alert</b>\n\nAgent in pane <code>%s</code> is paused awaiting human approval:\n\n<pre>%s</pre>",
-		html.EscapeString(event.PaneID),
+	messageText := fmt.Sprintf("🛡️ <b>Guaita Sentinel Alert</b>\n\n%s\n\n<pre>%s</pre>",
+		headerLine,
 		html.EscapeString(body),
 	)
 
@@ -264,7 +274,7 @@ func (t *TelegramNotifier) pollUpdates() {
 		default:
 		}
 
-		url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=15", t.Token, offset)
+		url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=5", t.Token, offset)
 		req, err := http.NewRequest(http.MethodGet, url, nil)
 		if err != nil {
 			time.Sleep(3 * time.Second)

@@ -27,6 +27,7 @@ type NotificationEvent struct {
 	Title            string
 	Body             string
 	PaneID           string
+	PromptKey        string
 	PairingURL       string
 	ActionApproveURL string
 	ActionRejectURL  string
@@ -50,16 +51,22 @@ type PendingNotifier interface {
 
 // Dispatcher coordinates multi-channel delivery with per-pane state transition deduplication.
 type Dispatcher struct {
-	mu            sync.Mutex
-	notifiers     []Notifier
-	waitingByPane map[string]waitingState
+	mu              sync.Mutex
+	notifiers       []Notifier
+	waitingByPane   map[string]waitingState
+	promptKeyByPane map[string]string
+	deliveredByPane map[string]map[string]bool
+	inFlightByPane  map[string]map[string]bool
 }
 
 // NewDispatcher creates an empty notification dispatcher.
 func NewDispatcher() *Dispatcher {
 	return &Dispatcher{
-		notifiers:     make([]Notifier, 0),
-		waitingByPane: make(map[string]waitingState),
+		notifiers:       make([]Notifier, 0),
+		waitingByPane:   make(map[string]waitingState),
+		promptKeyByPane: make(map[string]string),
+		deliveredByPane: make(map[string]map[string]bool),
+		inFlightByPane:  make(map[string]map[string]bool),
 	}
 }
 
@@ -74,6 +81,10 @@ func (d *Dispatcher) Register(n Notifier) {
 func (d *Dispatcher) RegisterOrReplace(n Notifier) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	for k := range d.deliveredByPane {
+		delete(d.deliveredByPane[k], n.Name())
+		delete(d.inFlightByPane[k], n.Name())
+	}
 	for i, existing := range d.notifiers {
 		if existing.Name() == n.Name() {
 			d.notifiers[i] = n
@@ -96,13 +107,48 @@ func (d *Dispatcher) Unregister(name string) {
 	d.notifiers = filtered
 }
 
-func (d *Dispatcher) broadcast(event NotificationEvent) {
+func (d *Dispatcher) resetPaneDeliveryLocked(key, promptKey string) {
+	d.promptKeyByPane[key] = promptKey
+	d.deliveredByPane[key] = make(map[string]bool, len(d.notifiers))
+	d.inFlightByPane[key] = make(map[string]bool, len(d.notifiers))
+}
+
+func (d *Dispatcher) deletePaneStateLocked(key string) {
+	delete(d.waitingByPane, key)
+	delete(d.promptKeyByPane, key)
+	delete(d.deliveredByPane, key)
+	delete(d.inFlightByPane, key)
+}
+
+func (d *Dispatcher) deliverMissingLocked(key string, event NotificationEvent) {
+	if d.deliveredByPane[key] == nil {
+		d.deliveredByPane[key] = make(map[string]bool, len(d.notifiers))
+	}
+	if d.inFlightByPane[key] == nil {
+		d.inFlightByPane[key] = make(map[string]bool, len(d.notifiers))
+	}
+	promptKey := d.promptKeyByPane[key]
+
 	for _, n := range d.notifiers {
-		go func(target Notifier) {
-			if err := target.Notify(event); err != nil {
-				log.Printf("[%s] notification delivery failed: %v", target.Name(), err)
+		chName := n.Name()
+		if d.deliveredByPane[key][chName] || d.inFlightByPane[key][chName] {
+			continue
+		}
+		d.inFlightByPane[key][chName] = true
+		go func(target Notifier, name string) {
+			err := target.Notify(event)
+			if err != nil {
+				log.Printf("[%s] notification delivery failed: %v", name, err)
 			}
-		}(n)
+			d.mu.Lock()
+			defer d.mu.Unlock()
+			if d.inFlightByPane[key] != nil && d.promptKeyByPane[key] == promptKey {
+				d.inFlightByPane[key][name] = false
+				if err == nil && d.deliveredByPane[key] != nil {
+					d.deliveredByPane[key][name] = true
+				}
+			}
+		}(n, chName)
 	}
 }
 
@@ -127,14 +173,24 @@ func (d *Dispatcher) DispatchOnWaiting(isWaiting bool, event NotificationEvent) 
 	if isWaiting {
 		if d.waitingByPane[key] == 0 {
 			d.waitingByPane[key] = waitingPending
+			d.resetPaneDeliveryLocked(key, event.PromptKey)
 			d.beginPending(event)
-			d.broadcast(event)
+			d.deliverMissingLocked(key, event)
+		} else if d.waitingByPane[key] == waitingPending {
+			if event.PromptKey != "" && d.promptKeyByPane[key] != "" && event.PromptKey != d.promptKeyByPane[key] {
+				d.resetPaneDeliveryLocked(key, event.PromptKey)
+				d.beginPending(event)
+			}
+			d.deliverMissingLocked(key, event)
 		}
 	} else {
 		if key == "_default" {
 			d.waitingByPane = make(map[string]waitingState)
+			d.promptKeyByPane = make(map[string]string)
+			d.deliveredByPane = make(map[string]map[string]bool)
+			d.inFlightByPane = make(map[string]map[string]bool)
 		} else {
-			delete(d.waitingByPane, key)
+			d.deletePaneStateLocked(key)
 		}
 	}
 }
@@ -154,13 +210,20 @@ func (d *Dispatcher) SyncWaitingPanes(events []NotificationEvent) {
 		activeKeys[key] = true
 		if d.waitingByPane[key] == 0 {
 			d.waitingByPane[key] = waitingPending
+			d.resetPaneDeliveryLocked(key, ev.PromptKey)
 			d.beginPending(ev)
-			d.broadcast(ev)
+			d.deliverMissingLocked(key, ev)
+		} else if d.waitingByPane[key] == waitingPending {
+			if ev.PromptKey != "" && d.promptKeyByPane[key] != "" && ev.PromptKey != d.promptKeyByPane[key] {
+				d.resetPaneDeliveryLocked(key, ev.PromptKey)
+				d.beginPending(ev)
+			}
+			d.deliverMissingLocked(key, ev)
 		}
 	}
 	for k := range d.waitingByPane {
 		if !activeKeys[k] {
-			delete(d.waitingByPane, k)
+			d.deletePaneStateLocked(k)
 		}
 	}
 }

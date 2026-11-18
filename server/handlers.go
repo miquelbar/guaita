@@ -758,6 +758,8 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 type wsPayload struct {
 	Output       string              `json:"output"`
 	Waiting      bool                `json:"waiting"`
+	PromptType   string              `json:"prompt_type,omitempty"`
+	PromptText   string              `json:"prompt_text,omitempty"`
 	PaneID       string              `json:"pane_id,omitempty"`
 	SelectedPane string              `json:"selected_pane,omitempty"`
 	Panes        []herdr.PaneSummary `json:"panes,omitempty"`
@@ -854,6 +856,8 @@ func (s *Server) maskConsumedWaiting(status *herdr.AgentStatus) {
 	}
 	if status.Waiting && dispatcher.IsWaitingConsumed(status.PaneID) {
 		status.Waiting = false
+		status.PromptType = ""
+		status.PromptText = ""
 	}
 	if len(status.Panes) == 0 {
 		return
@@ -862,6 +866,8 @@ func (s *Server) maskConsumedWaiting(status *herdr.AgentStatus) {
 	for i := range status.Panes {
 		if status.Panes[i].Waiting && dispatcher.IsWaitingConsumed(status.Panes[i].PaneID) {
 			status.Panes[i].Waiting = false
+			status.Panes[i].PromptType = ""
+			status.Panes[i].PromptText = ""
 		}
 	}
 }
@@ -896,14 +902,23 @@ func (s *Server) dispatchWaitingStatuses(waiting []herdr.AgentStatus) {
 	events := make([]notify.NotificationEvent, 0, len(waiting))
 	baseURL := s.BaseURL()
 	for _, st := range waiting {
-		title := "🛡️ Guaita: Approval Required"
+		label := "Approval Required"
+		if st.PromptType == "question" {
+			label = "Question (Reply Needed)"
+		}
+		title := "🛡️ Guaita: " + label
 		if st.PaneID != "" {
-			title = fmt.Sprintf("🛡️ Guaita [%s]: Approval Required", st.PaneID)
+			title = fmt.Sprintf("🛡️ Guaita [%s]: %s", st.PaneID, label)
+		}
+		promptKey := ""
+		if st.PromptType != "" || st.PromptText != "" {
+			promptKey = st.PromptType + ":" + st.PromptText
 		}
 		events = append(events, notify.NotificationEvent{
 			Title:      title,
 			Body:       st.Output,
 			PaneID:     st.PaneID,
+			PromptKey:  promptKey,
 			PairingURL: baseURL,
 		})
 	}
@@ -952,6 +967,8 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		payload := wsPayload{
 			Output:       status.Output,
 			Waiting:      status.Waiting,
+			PromptType:   status.PromptType,
+			PromptText:   status.PromptText,
 			PaneID:       status.PaneID,
 			SelectedPane: preferred,
 			Panes:        status.Panes,

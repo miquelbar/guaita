@@ -164,15 +164,16 @@ const mobileTemplate = `<!DOCTYPE html>
             display: flex;
             flex-direction: column;
             gap: 16px;
-            scroll-behavior: smooth;
+            position: relative;
         }
         .message-row {
             display: flex;
             gap: 10px;
-            max-width: 95%%;
+            max-width: 96%%;
+            width: 100%%;
         }
         .message-row.agent { align-self: flex-start; }
-        .message-row.user { align-self: flex-end; flex-direction: row-reverse; }
+        .message-row.user { align-self: flex-end; flex-direction: row-reverse; width: auto; }
         .msg-avatar {
             width: 28px;
             height: 28px;
@@ -195,11 +196,111 @@ const mobileTemplate = `<!DOCTYPE html>
             line-height: 1.5;
             color: #e2e8f0;
             box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+            flex: 1;
+            min-width: 0;
+            transition: border-color 0.25s, box-shadow 0.25s;
+        }
+        .msg-content.card-working {
+            border-color: rgba(56, 189, 248, 0.55);
+            box-shadow: 0 0 14px rgba(56, 189, 248, 0.12);
+        }
+        .msg-content.card-idle {
+            border-color: rgba(16, 185, 129, 0.35);
+        }
+        .msg-content.card-question {
+            border-color: var(--warning);
+            box-shadow: 0 0 16px rgba(245, 158, 11, 0.2);
+        }
+        .msg-content.card-confirm {
+            border-color: var(--danger);
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
         }
         .message-row.user .msg-content {
             background: var(--user-bubble);
             border-color: rgba(56, 189, 248, 0.4);
             color: #fff;
+            flex: initial;
+        }
+
+        /* Agent Live State Banner */
+        .agent-state-banner {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+            letter-spacing: 0.01em;
+            border: 1px solid transparent;
+        }
+        .state-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%%;
+            flex-shrink: 0;
+        }
+        .agent-state-banner.state-working {
+            background: rgba(56, 189, 248, 0.14);
+            border-color: rgba(56, 189, 248, 0.5);
+            color: #7dd3fc;
+        }
+        .agent-state-banner.state-working .state-dot {
+            background: var(--accent);
+            box-shadow: 0 0 8px var(--accent);
+            animation: dot-pulse 1.1s infinite ease-in-out;
+        }
+        .agent-state-banner.state-idle {
+            background: rgba(16, 185, 129, 0.12);
+            border-color: rgba(16, 185, 129, 0.4);
+            color: #6ee7b7;
+        }
+        .agent-state-banner.state-idle .state-dot {
+            background: var(--success);
+        }
+        .agent-state-banner.state-question {
+            background: rgba(245, 158, 11, 0.18);
+            border-color: var(--warning);
+            color: #fcd34d;
+            animation: pulse-warning 1.8s infinite;
+        }
+        .agent-state-banner.state-question .state-dot {
+            background: var(--warning);
+            box-shadow: 0 0 8px var(--warning);
+            animation: dot-pulse 1s infinite ease-in-out;
+        }
+        .agent-state-banner.state-confirm {
+            background: rgba(239, 68, 68, 0.18);
+            border-color: var(--danger);
+            color: #fca5a5;
+            animation: pulse-border 1.8s infinite;
+        }
+        .agent-state-banner.state-confirm .state-dot {
+            background: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
+            animation: dot-pulse 1s infinite ease-in-out;
+        }
+        .agent-state-banner.state-offline {
+            background: rgba(148, 163, 184, 0.1);
+            border-color: rgba(148, 163, 184, 0.3);
+            color: var(--text-dim);
+        }
+        .agent-state-banner.state-offline .state-dot {
+            background: var(--text-dim);
+        }
+        @keyframes dot-pulse {
+            0%%, 100%% { transform: scale(1); opacity: 1; }
+            50%% { transform: scale(1.35); opacity: 0.55; }
+        }
+        @keyframes pulse-warning {
+            0%% { border-color: rgba(245, 158, 11, 0.45); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.2); }
+            50%% { border-color: rgba(245, 158, 11, 1); box-shadow: 0 0 12px 2px rgba(245, 158, 11, 0.32); }
+            100%% { border-color: rgba(245, 158, 11, 0.45); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.2); }
+        }
+
+        .terminal-wrap {
+            position: relative;
         }
         .terminal-block {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -217,15 +318,57 @@ const mobileTemplate = `<!DOCTYPE html>
             -webkit-overflow-scrolling: touch;
             color: #cbd5e1;
         }
+        .term-highlight-question {
+            display: block;
+            background: rgba(245, 158, 11, 0.22);
+            color: #fef3c7;
+            border-left: 3px solid var(--warning);
+            padding: 4px 8px;
+            margin: 4px -4px 0 -4px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .term-highlight-confirm {
+            display: block;
+            background: rgba(239, 68, 68, 0.22);
+            color: #fee2e2;
+            border-left: 3px solid var(--danger);
+            padding: 4px 8px;
+            margin: 4px -4px 0 -4px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .btn-jump-bottom {
+            display: none;
+            position: absolute;
+            bottom: 10px;
+            right: 12px;
+            background: rgba(14, 165, 233, 0.92);
+            color: #0b0f19;
+            border: none;
+            border-radius: 99px;
+            padding: 5px 12px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.45);
+            z-index: 20;
+            touch-action: manipulation;
+        }
 
-        /* Action approval banner */
+        /* Action approval / question banner */
         .approval-card {
             background: rgba(239, 68, 68, 0.08);
             border: 1px solid var(--danger);
             border-radius: 12px;
             padding: 14px;
-            margin-top: 8px;
+            margin-top: 10px;
             animation: pulse-border 2s infinite;
+        }
+        .approval-card.question-mode {
+            background: rgba(245, 158, 11, 0.11);
+            border-color: var(--warning);
+            animation: pulse-warning 2s infinite;
         }
         @keyframes pulse-border {
             0%% { border-color: rgba(239, 68, 68, 0.4); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.2); }
@@ -239,9 +382,31 @@ const mobileTemplate = `<!DOCTYPE html>
             display: flex;
             align-items: center;
             gap: 6px;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             text-transform: uppercase;
             letter-spacing: 0.04em;
+        }
+        .approval-card.question-mode .approval-title {
+            color: #fbbf24;
+        }
+        .prompt-quote-box {
+            background: #060911;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-left: 4px solid var(--danger);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin: 8px 0 10px 0;
+            font-size: 0.88rem;
+            font-weight: 600;
+            line-height: 1.45;
+            color: #f8fafc;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .approval-card.question-mode .prompt-quote-box {
+            border-left-color: var(--warning);
+            background: rgba(11, 15, 25, 0.9);
+            color: #fef3c7;
         }
         .action-pills {
             display: grid;
@@ -266,6 +431,19 @@ const mobileTemplate = `<!DOCTYPE html>
         .pill-btn:active { transform: scale(0.96); opacity: 0.9; }
         .pill-approve { background: var(--success); color: #fff; }
         .pill-reject { background: var(--danger); color: #fff; }
+        .pill-reply {
+            background: var(--warning);
+            color: #0b0f19;
+            grid-column: 1 / -1;
+            font-weight: 700;
+        }
+        .pill-secondary {
+            background: var(--surface-hover);
+            color: var(--text);
+            border: 1px solid var(--surface-border);
+            padding: 10px;
+            font-size: 0.82rem;
+        }
 
         /* Floating ChatGPT-style input bar */
         .bottom-bar {
@@ -310,9 +488,13 @@ const mobileTemplate = `<!DOCTYPE html>
             border-radius: 26px;
             padding: 4px 6px 4px 16px;
             gap: 8px;
-            transition: border-color 0.2s;
+            transition: border-color 0.2s, box-shadow 0.2s;
         }
         .input-pill-box:focus-within { border-color: var(--accent); }
+        .input-pill-box.awaiting-reply {
+            border-color: var(--warning);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.28);
+        }
         .chat-input {
             flex: 1;
             background: transparent;
@@ -368,7 +550,7 @@ const mobileTemplate = `<!DOCTYPE html>
             </div>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
-            <select id="mobilePaneSelect" aria-label="Select session pane" style="background: var(--surface); color: var(--text); border: 1px solid var(--surface-border); border-radius: 8px; padding: 5px 8px; font-size: 0.72rem; max-width: 145px; outline: none;">
+            <select id="mobilePaneSelect" aria-label="Select session pane" style="background: var(--surface); color: var(--text); border: 1px solid var(--surface-border); border-radius: 8px; padding: 5px 8px; font-size: 0.72rem; max-width: 155px; outline: none;">
                 <option value="">Auto</option>
             </select>
             <div class="view-toggle">
@@ -382,16 +564,32 @@ const mobileTemplate = `<!DOCTYPE html>
     <div id="chatView" class="chat-container">
         <div id="agentStatusRow" class="message-row agent">
             <div class="msg-avatar agent">🤖</div>
-            <div class="msg-content">
-                <div style="font-size: 0.72rem; color: var(--accent); font-weight: 600; margin-bottom: 4px;">HERDR SENTINEL <span id="agentTime" style="color: var(--text-dim); font-weight: 400; margin-left: 6px;"></span></div>
-                <div id="agentText">Connected to Herdr agent workspace. Monitoring terminal for prompts...</div>
-                <div id="terminalSnippet" class="terminal-block">Loading initial agent buffer...</div>
+            <div id="agentMsgCard" class="msg-content">
+                <div style="font-size: 0.72rem; color: var(--accent); font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                    <span>HERDR SENTINEL</span>
+                    <span id="agentTime" style="color: var(--text-dim); font-weight: 400;"></span>
+                </div>
+                <div id="agentStateBanner" class="agent-state-banner state-idle">
+                    <span class="state-dot"></span>
+                    <span id="agentStateLabel">💤 IDLE / READY — Monitoring agent workspace</span>
+                </div>
+                <div id="agentText" style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 4px;">Live terminal stream from selected session pane:</div>
+                <div class="terminal-wrap">
+                    <div id="terminalSnippet" class="terminal-block">Loading initial agent buffer...</div>
+                    <button type="button" id="btnJumpTermMobile" class="btn-jump-bottom">↓ Bottom</button>
+                </div>
                 <div id="approvalCard" class="approval-card" style="display: none;">
-                    <div class="approval-title">⚠️ Approval Requested</div>
-                    <div style="font-size: 0.8rem; color: #cbd5e1;">Agent is paused awaiting human confirmation:</div>
-                    <div class="action-pills">
+                    <div id="approvalTitleMobile" class="approval-title">⚠️ Approval Requested</div>
+                    <div id="approvalDescMobile" style="font-size: 0.8rem; color: #cbd5e1;">Agent is paused awaiting human confirmation:</div>
+                    <div id="promptQuoteMobile" class="prompt-quote-box" style="display: none;"></div>
+                    <div id="confirmPillsMobile" class="action-pills">
                         <button type="button" class="pill-btn pill-approve" data-action="approve">✓ APPROVE (Y)</button>
                         <button type="button" class="pill-btn pill-reject" data-action="reject">✕ REJECT (N)</button>
+                    </div>
+                    <div id="questionPillsMobile" class="action-pills" style="display: none;">
+                        <button type="button" id="btnFocusReplyMobile" class="pill-btn pill-reply">✍️ Write Answer Below</button>
+                        <button type="button" class="pill-btn pill-secondary" data-action="enter">↵ Send Enter</button>
+                        <button type="button" class="pill-btn pill-secondary" data-action="esc">⎋ Cancel (Esc)</button>
                     </div>
                 </div>
             </div>
@@ -431,14 +629,102 @@ const mobileTemplate = `<!DOCTYPE html>
     const termSnippet = document.getElementById('terminalSnippet');
     const rawTerminal = document.getElementById('rawTerminalView');
     const approvalCard = document.getElementById('approvalCard');
+    const approvalTitleMobile = document.getElementById('approvalTitleMobile');
+    const approvalDescMobile = document.getElementById('approvalDescMobile');
+    const promptQuoteMobile = document.getElementById('promptQuoteMobile');
+    const confirmPillsMobile = document.getElementById('confirmPillsMobile');
+    const questionPillsMobile = document.getElementById('questionPillsMobile');
+    const agentStateBanner = document.getElementById('agentStateBanner');
+    const agentStateLabel = document.getElementById('agentStateLabel');
+    const agentMsgCard = document.getElementById('agentMsgCard');
+    const agentTextEl = document.getElementById('agentText');
     const chatContainer = document.getElementById('chatView');
     const agentStatusRow = document.getElementById('agentStatusRow');
     const agentTimeEl = document.getElementById('agentTime');
+    const mobileForm = document.getElementById('mobileInputForm');
+    const userInputEl = document.getElementById('userInput');
+    const btnJumpTermMobile = document.getElementById('btnJumpTermMobile');
     let wasWaiting = false;
     let lastOutput = '';
+    let lastRenderSig = '';
     let moveAgentAfterUser = false;
     let currentPaneID = '';
     const mobilePaneSelect = document.getElementById('mobilePaneSelect');
+
+    function createScrollTracker(el, jumpBtn) {
+        let pinned = true;
+        let programmatic = false;
+        const checkPinned = () => {
+            if (!el) return true;
+            return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 48;
+        };
+        if (el) {
+            el.addEventListener('scroll', () => {
+                if (programmatic) return;
+                pinned = checkPinned();
+                if (jumpBtn) {
+                    jumpBtn.style.display = pinned ? 'none' : 'block';
+                }
+            }, { passive: true });
+        }
+        if (jumpBtn && el) {
+            jumpBtn.addEventListener('click', () => {
+                pinned = true;
+                programmatic = true;
+                el.scrollTop = el.scrollHeight;
+                jumpBtn.style.display = 'none';
+                setTimeout(() => { programmatic = false; }, 50);
+            });
+        }
+        return {
+            isPinned: () => pinned,
+            update: (mutateFn) => {
+                if (!el) { mutateFn(); return; }
+                const wasPinned = pinned;
+                const prevTop = el.scrollTop;
+                programmatic = true;
+                mutateFn();
+                if (wasPinned) {
+                    el.scrollTop = el.scrollHeight;
+                    if (jumpBtn) jumpBtn.style.display = 'none';
+                } else {
+                    el.scrollTop = prevTop;
+                    if (jumpBtn) jumpBtn.style.display = 'block';
+                }
+                setTimeout(() => { programmatic = false; }, 50);
+            },
+            scrollToBottom: () => {
+                if (!el) return;
+                pinned = true;
+                programmatic = true;
+                el.scrollTop = el.scrollHeight;
+                if (jumpBtn) jumpBtn.style.display = 'none';
+                setTimeout(() => { programmatic = false; }, 50);
+            }
+        };
+    }
+
+    const chatTracker = createScrollTracker(chatContainer, null);
+    const termTracker = createScrollTracker(termSnippet, btnJumpTermMobile);
+    const rawTracker = createScrollTracker(rawTerminal, null);
+
+    function paneStateTag(p) {
+        if (p.waiting) {
+            return p.prompt_type === 'question' ? '❓ ' : '🛑 ';
+        }
+        if (p.agent_state === 'working') return '⚡ ';
+        if (p.agent_state === 'idle' || p.agent_state === 'done') return '💤 ';
+        return '• ';
+    }
+
+    function paneStateSuffix(p) {
+        if (p.waiting) {
+            return p.prompt_type === 'question' ? ' [QUESTION]' : ' [APPROVAL]';
+        }
+        if (p.agent_state === 'working') return ' [WORKING]';
+        if (p.agent_state === 'idle' || p.agent_state === 'done') return ' [IDLE]';
+        return '';
+    }
 
     function renderMobilePanes(panes, selectedPane) {
         if (!mobilePaneSelect || !panes) return;
@@ -446,9 +732,8 @@ const mobileTemplate = `<!DOCTYPE html>
         const prevSig = Array.from(mobilePaneSelect.options).map(o => o.value + '|' + o.textContent).join(';;');
         const opts = [{ value: '', label: 'Auto (Blocked first)' }];
         panes.forEach(p => {
-            const flag = p.waiting ? '⚠️ ' : '';
             const title = p.title ? (' · ' + p.title) : '';
-            opts.push({ value: p.pane_id, label: flag + p.pane_id + title });
+            opts.push({ value: p.pane_id, label: paneStateTag(p) + p.pane_id + title + paneStateSuffix(p) });
         });
         const nextSig = opts.map(o => o.value + '|' + o.label).join(';;');
         if (prevSig !== nextSig) {
@@ -465,6 +750,10 @@ const mobileTemplate = `<!DOCTYPE html>
 
     if (mobilePaneSelect) {
         mobilePaneSelect.addEventListener('change', () => {
+            lastRenderSig = '';
+            termTracker.scrollToBottom();
+            rawTracker.scrollToBottom();
+            chatTracker.scrollToBottom();
             fetch('/api/panes/select', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -481,7 +770,9 @@ const mobileTemplate = `<!DOCTYPE html>
     if (window.visualViewport) {
         window.visualViewport.addEventListener('resize', () => {
             document.body.style.height = window.visualViewport.height + 'px';
-            chatContainer.scrollTop = chatContainer.scrollHeight;
+            if (chatTracker.isPinned() || document.activeElement === userInputEl) {
+                chatTracker.scrollToBottom();
+            }
         });
         window.visualViewport.addEventListener('scroll', () => {
             window.scrollTo(0, 0);
@@ -519,11 +810,119 @@ const mobileTemplate = `<!DOCTYPE html>
         ` + "`" + `;
         chatContainer.appendChild(row);
         moveAgentAfterUser = true;
-        chatContainer.scrollTop = chatContainer.scrollHeight;
+        chatTracker.scrollToBottom();
     }
 
     function escapeHTML(str) {
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (!str) return '';
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function formatTerminalWithHighlight(output, waiting, promptType, promptText) {
+        if (!output) return '';
+        if (!waiting || !promptText) {
+            return escapeHTML(output);
+        }
+        const cls = promptType === 'question' ? 'term-highlight-question' : 'term-highlight-confirm';
+        const idx = output.lastIndexOf(promptText);
+        if (idx !== -1) {
+            const before = output.slice(0, idx);
+            const match = output.slice(idx, idx + promptText.length);
+            const after = output.slice(idx + promptText.length);
+            return escapeHTML(before) + '<span class="' + cls + '">' + escapeHTML(match) + '</span>' + escapeHTML(after);
+        }
+        // Fallback: highlight the last non-empty line match
+        const lines = promptText.split('\n').filter(Boolean);
+        const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
+        if (lastLine) {
+            const lIdx = output.lastIndexOf(lastLine);
+            if (lIdx !== -1) {
+                const before = output.slice(0, lIdx);
+                const match = output.slice(lIdx);
+                return escapeHTML(before) + '<span class="' + cls + '">' + escapeHTML(match) + '</span>';
+            }
+        }
+        return escapeHTML(output);
+    }
+
+    function updateMobileStateUI(data) {
+        const isWaiting = Boolean(data.waiting);
+        const isQuestion = isWaiting && data.prompt_type === 'question';
+        const isWorking = !isWaiting && data.agent_state === 'working';
+        const isOffline = data.herdr_online === false;
+        const paneLabel = data.pane_id ? (' (' + data.pane_id + ')') : '';
+
+        agentStateBanner.className = 'agent-state-banner';
+        agentMsgCard.className = 'msg-content';
+
+        if (isOffline) {
+            agentStateBanner.classList.add('state-offline');
+            agentStateLabel.textContent = '⚪ OFFLINE — Herdr / tmux inactive';
+            connStatus.style.color = 'var(--text-dim)';
+            connStatus.innerText = '⚪ Backend Offline';
+            if (agentTextEl) agentTextEl.textContent = 'No active agent terminal detected.';
+        } else if (isQuestion) {
+            agentStateBanner.classList.add('state-question');
+            agentMsgCard.classList.add('card-question');
+            agentStateLabel.textContent = '❓ WAITING FOR REPLY' + paneLabel + ' — Agent asked a question';
+            connStatus.style.color = 'var(--warning)';
+            connStatus.innerText = '❓ Waiting for your written reply';
+            if (agentTextEl) agentTextEl.textContent = 'Agent is paused waiting for you to write a response:';
+        } else if (isWaiting) {
+            agentStateBanner.classList.add('state-confirm');
+            agentMsgCard.classList.add('card-confirm');
+            agentStateLabel.textContent = '🛑 APPROVAL REQUIRED' + paneLabel + ' — Yes / No confirmation';
+            connStatus.style.color = 'var(--danger)';
+            connStatus.innerText = '🛑 Approval Required (Yes/No)';
+            if (agentTextEl) agentTextEl.textContent = 'Agent is paused on a confirmation prompt:';
+        } else if (isWorking) {
+            agentStateBanner.classList.add('state-working');
+            agentMsgCard.classList.add('card-working');
+            agentStateLabel.textContent = '⚡ WORKING' + paneLabel + ' — Agent is actively executing...';
+            connStatus.style.color = 'var(--accent)';
+            connStatus.innerText = '⚡ Agent Working...';
+            if (agentTextEl) agentTextEl.textContent = 'Agent is currently running tasks and streaming output:';
+        } else {
+            agentStateBanner.classList.add('state-idle');
+            agentMsgCard.classList.add('card-idle');
+            agentStateLabel.textContent = '💤 IDLE / READY' + paneLabel + ' — Waiting for next instruction';
+            connStatus.style.color = 'var(--success)';
+            connStatus.innerText = '💤 Agent Idle (Ready)';
+            if (agentTextEl) agentTextEl.textContent = 'Agent finished its turn and is ready for instructions:';
+        }
+
+        if (isWaiting) {
+            approvalCard.style.display = 'block';
+            if (isQuestion) {
+                approvalCard.classList.add('question-mode');
+                approvalTitleMobile.textContent = '❓ Question — Written Reply Required';
+                approvalDescMobile.textContent = 'This prompt requires a written answer (not Yes/No):';
+                confirmPillsMobile.style.display = 'none';
+                questionPillsMobile.style.display = 'grid';
+                if (mobileForm) mobileForm.classList.add('awaiting-reply');
+                if (userInputEl) userInputEl.placeholder = '✍️ Type your answer to the agent question...';
+            } else {
+                approvalCard.classList.remove('question-mode');
+                approvalTitleMobile.textContent = '⚠️ Approval Required (Yes / No)';
+                approvalDescMobile.textContent = 'Agent is paused awaiting human confirmation:';
+                confirmPillsMobile.style.display = 'grid';
+                questionPillsMobile.style.display = 'none';
+                if (mobileForm) mobileForm.classList.remove('awaiting-reply');
+                if (userInputEl) userInputEl.placeholder = 'Reply to agent or type command...';
+            }
+
+            if (data.prompt_text) {
+                promptQuoteMobile.style.display = 'block';
+                promptQuoteMobile.textContent = data.prompt_text;
+            } else {
+                promptQuoteMobile.style.display = 'none';
+                promptQuoteMobile.textContent = '';
+            }
+        } else {
+            approvalCard.style.display = 'none';
+            if (mobileForm) mobileForm.classList.remove('awaiting-reply');
+            if (userInputEl) userInputEl.placeholder = 'Reply to agent or type command...';
+        }
     }
 
     function connect() {
@@ -540,15 +939,30 @@ const mobileTemplate = `<!DOCTYPE html>
             try {
                 const data = JSON.parse(event.data);
                 const outputChanged = data.output !== undefined && data.output !== lastOutput;
-                if (data.output !== undefined) {
+                const renderSig = [
+                    data.output || '',
+                    data.waiting ? '1' : '0',
+                    data.prompt_type || '',
+                    data.prompt_text || ''
+                ].join('||');
+
+                if (data.output !== undefined && renderSig !== lastRenderSig) {
                     lastOutput = data.output;
+                    lastRenderSig = renderSig;
                     if (outputChanged && agentTimeEl) {
                         agentTimeEl.innerText = nowTimeStr();
                     }
-                    termSnippet.innerText = data.output;
-                    rawTerminal.innerText = data.output;
-                    termSnippet.scrollTop = termSnippet.scrollHeight;
-                    rawTerminal.scrollTop = rawTerminal.scrollHeight;
+                    termTracker.update(() => {
+                        termSnippet.innerHTML = formatTerminalWithHighlight(
+                            data.output,
+                            data.waiting,
+                            data.prompt_type,
+                            data.prompt_text
+                        );
+                    });
+                    rawTracker.update(() => {
+                        rawTerminal.innerText = data.output;
+                    });
                 }
 
                 if (data.pane_id) {
@@ -557,24 +971,28 @@ const mobileTemplate = `<!DOCTYPE html>
                 if (data.panes) {
                     renderMobilePanes(data.panes, data.selected_pane);
                 }
+
+                updateMobileStateUI(data);
+
                 if (data.waiting) {
-                    approvalCard.style.display = 'block';
                     if (!wasWaiting) {
-                        chatContainer.appendChild(agentStatusRow);
+                        chatTracker.update(() => {
+                            chatContainer.appendChild(agentStatusRow);
+                        });
                         moveAgentAfterUser = false;
                         if (navigator.vibrate) navigator.vibrate([250, 100, 250, 100, 300]);
                         wasWaiting = true;
                     }
                 } else {
-                    approvalCard.style.display = 'none';
                     wasWaiting = false;
                 }
 
                 if (moveAgentAfterUser && outputChanged) {
-                    chatContainer.appendChild(agentStatusRow);
+                    chatTracker.update(() => {
+                        chatContainer.appendChild(agentStatusRow);
+                    });
                     moveAgentAfterUser = false;
                 }
-                chatContainer.scrollTop = chatContainer.scrollHeight;
             } catch (err) {
                 console.error("WS parse error", err);
             }
@@ -629,6 +1047,13 @@ const mobileTemplate = `<!DOCTYPE html>
     }
 
     document.addEventListener('click', (e) => {
+        if (e.target.closest('#btnFocusReplyMobile')) {
+            if (userInputEl) {
+                userInputEl.focus();
+                userInputEl.scrollIntoView({ block: 'nearest' });
+            }
+            return;
+        }
         const viewBtn = e.target.closest('[data-view]');
         if (viewBtn) {
             switchView(viewBtn.dataset.view);
@@ -639,7 +1064,6 @@ const mobileTemplate = `<!DOCTYPE html>
             sendAction(actionBtn.dataset.action);
         }
     });
-    const mobileForm = document.getElementById('mobileInputForm');
     if (mobileForm) {
         mobileForm.addEventListener('submit', (e) => {
             e.preventDefault();
@@ -870,10 +1294,11 @@ const adminTemplate = `<!DOCTYPE html>
         .msg-row {
             display: flex;
             gap: 12px;
-            max-width: 90%%;
+            max-width: 92%%;
+            width: 100%%;
         }
         .msg-row.agent { align-self: flex-start; }
-        .msg-row.user { align-self: flex-end; flex-direction: row-reverse; }
+        .msg-row.user { align-self: flex-end; flex-direction: row-reverse; width: auto; }
         .bubble {
             background: var(--agent-bubble);
             border: 1px solid var(--surface-border);
@@ -882,11 +1307,104 @@ const adminTemplate = `<!DOCTYPE html>
             color: #e2e8f0;
             font-size: 0.9rem;
             line-height: 1.5;
+            transition: border-color 0.25s, box-shadow 0.25s;
+        }
+        .bubble.card-working {
+            border-color: rgba(56, 189, 248, 0.55);
+            box-shadow: 0 0 14px rgba(56, 189, 248, 0.12);
+        }
+        .bubble.card-idle {
+            border-color: rgba(16, 185, 129, 0.35);
+        }
+        .bubble.card-question {
+            border-color: var(--warning);
+            box-shadow: 0 0 16px rgba(245, 158, 11, 0.2);
+        }
+        .bubble.card-confirm {
+            border-color: var(--danger);
+            box-shadow: 0 0 16px rgba(239, 68, 68, 0.2);
         }
         .msg-row.user .bubble {
             background: var(--user-bubble);
             border-color: rgba(56, 189, 248, 0.4);
             color: #fff;
+        }
+        .admin-state-banner {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            margin-bottom: 10px;
+            border: 1px solid transparent;
+        }
+        .admin-state-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%%;
+            flex-shrink: 0;
+        }
+        .admin-state-banner.state-working {
+            background: rgba(56, 189, 248, 0.14);
+            border-color: rgba(56, 189, 248, 0.5);
+            color: #7dd3fc;
+        }
+        .admin-state-banner.state-working .admin-state-dot {
+            background: var(--accent);
+            box-shadow: 0 0 8px var(--accent);
+            animation: admin-dot-pulse 1.1s infinite ease-in-out;
+        }
+        .admin-state-banner.state-idle {
+            background: rgba(16, 185, 129, 0.12);
+            border-color: rgba(16, 185, 129, 0.4);
+            color: #6ee7b7;
+        }
+        .admin-state-banner.state-idle .admin-state-dot {
+            background: var(--success);
+        }
+        .admin-state-banner.state-question {
+            background: rgba(245, 158, 11, 0.18);
+            border-color: var(--warning);
+            color: #fcd34d;
+            animation: admin-pulse-warning 1.8s infinite;
+        }
+        .admin-state-banner.state-question .admin-state-dot {
+            background: var(--warning);
+            box-shadow: 0 0 8px var(--warning);
+            animation: admin-dot-pulse 1s infinite ease-in-out;
+        }
+        .admin-state-banner.state-confirm {
+            background: rgba(239, 68, 68, 0.18);
+            border-color: var(--danger);
+            color: #fca5a5;
+            animation: pulse-border 1.8s infinite;
+        }
+        .admin-state-banner.state-confirm .admin-state-dot {
+            background: var(--danger);
+            box-shadow: 0 0 8px var(--danger);
+            animation: admin-dot-pulse 1s infinite ease-in-out;
+        }
+        .admin-state-banner.state-offline {
+            background: rgba(148, 163, 184, 0.1);
+            border-color: rgba(148, 163, 184, 0.3);
+            color: var(--text-dim);
+        }
+        .admin-state-banner.state-offline .admin-state-dot {
+            background: var(--text-dim);
+        }
+        @keyframes admin-dot-pulse {
+            0%%, 100%% { transform: scale(1); opacity: 1; }
+            50%% { transform: scale(1.35); opacity: 0.55; }
+        }
+        @keyframes admin-pulse-warning {
+            0%% { border-color: rgba(245, 158, 11, 0.45); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.2); }
+            50%% { border-color: rgba(245, 158, 11, 1); box-shadow: 0 0 12px 2px rgba(245, 158, 11, 0.32); }
+            100%% { border-color: rgba(245, 158, 11, 0.45); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.2); }
+        }
+        .terminal-wrap-admin {
+            position: relative;
         }
         .terminal-viewport {
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
@@ -903,6 +1421,42 @@ const adminTemplate = `<!DOCTYPE html>
             overflow-y: auto;
             color: #cbd5e1;
         }
+        .term-highlight-question {
+            display: block;
+            background: rgba(245, 158, 11, 0.22);
+            color: #fef3c7;
+            border-left: 3px solid var(--warning);
+            padding: 4px 8px;
+            margin: 4px -4px 0 -4px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .term-highlight-confirm {
+            display: block;
+            background: rgba(239, 68, 68, 0.22);
+            color: #fee2e2;
+            border-left: 3px solid var(--danger);
+            padding: 4px 8px;
+            margin: 4px -4px 0 -4px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        .btn-jump-bottom-admin {
+            display: none;
+            position: absolute;
+            bottom: 10px;
+            right: 14px;
+            background: rgba(14, 165, 233, 0.92);
+            color: #0b0f19;
+            border: none;
+            border-radius: 99px;
+            padding: 5px 12px;
+            font-size: 0.72rem;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.45);
+            z-index: 20;
+        }
         .approval-banner {
             background: rgba(239, 68, 68, 0.08);
             border: 1px solid var(--danger);
@@ -911,8 +1465,33 @@ const adminTemplate = `<!DOCTYPE html>
             margin-top: 10px;
             animation: pulse-border 2s infinite;
         }
+        .approval-banner.question-mode {
+            background: rgba(245, 158, 11, 0.11);
+            border-color: var(--warning);
+            animation: admin-pulse-warning 2s infinite;
+        }
+        .prompt-quote-admin {
+            background: #060911;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-left: 4px solid var(--danger);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin: 8px 0 10px 0;
+            font-size: 0.9rem;
+            font-weight: 600;
+            line-height: 1.45;
+            color: #f8fafc;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .approval-banner.question-mode .prompt-quote-admin {
+            border-left-color: var(--warning);
+            background: rgba(11, 15, 25, 0.9);
+            color: #fef3c7;
+        }
         .action-grid {
             display: flex;
+            flex-wrap: wrap;
             gap: 10px;
             margin-top: 10px;
         }
@@ -929,6 +1508,8 @@ const adminTemplate = `<!DOCTYPE html>
         }
         .btn-act-app { background: var(--success); color: #fff; }
         .btn-act-rej { background: var(--danger); color: #fff; }
+        .btn-act-reply { background: var(--warning); color: #0b0f19; font-weight: 700; }
+        .btn-act-sec { background: var(--surface-hover); color: var(--text); border: 1px solid var(--surface-border); }
         .chat-footer {
             padding: 14px 18px 16px 18px;
             border-top: 1px solid var(--surface-border);
@@ -990,9 +1571,13 @@ const adminTemplate = `<!DOCTYPE html>
             max-width: 820px;
             margin: 0 auto;
             width: 100%%;
-            transition: border-color 0.2s;
+            transition: border-color 0.2s, box-shadow 0.2s;
         }
         .chat-input-pill:focus-within { border-color: var(--accent); }
+        .chat-input-pill.awaiting-reply {
+            border-color: var(--warning);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.28);
+        }
         .txt-chat {
             flex: 1;
             background: transparent;
@@ -1169,17 +1754,33 @@ const adminTemplate = `<!DOCTYPE html>
             <div id="adminChatBody" class="chat-body">
                 <div id="adminAgentRow" class="msg-row agent">
                     <div style="font-size: 20px;">🤖</div>
-                    <div class="bubble" style="width: 100%%;">
-                        <div style="font-size: 0.75rem; color: var(--accent); font-weight: 600; margin-bottom: 4px;">AGENT EXECUTION STREAM <span id="adminAgentTime" style="color: var(--text-dim); font-weight: 400; margin-left: 6px;"></span></div>
-                        <div id="agentTextAdmin">Monitoring active Herdr session. Output from current pane:</div>
-                        <div id="terminalSnippetAdmin" class="terminal-viewport">Awaiting Herdr output...</div>
+                    <div id="adminAgentBubble" class="bubble" style="width: 100%%;">
+                        <div style="font-size: 0.75rem; color: var(--accent); font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+                            <span>AGENT EXECUTION STREAM</span>
+                            <span id="adminAgentTime" style="color: var(--text-dim); font-weight: 400;"></span>
+                        </div>
+                        <div id="adminStateBanner" class="admin-state-banner state-idle">
+                            <span class="admin-state-dot"></span>
+                            <span id="adminStateLabel">💤 IDLE / READY — Monitoring active Herdr session</span>
+                        </div>
+                        <div id="agentTextAdmin" style="font-size: 0.82rem; color: var(--text-dim);">Live terminal stream from selected session pane:</div>
+                        <div class="terminal-wrap-admin">
+                            <div id="terminalSnippetAdmin" class="terminal-viewport">Awaiting Herdr output...</div>
+                            <button type="button" id="btnJumpTermAdmin" class="btn-jump-bottom-admin">↓ Bottom</button>
+                        </div>
                         
                         <div id="approvalBannerAdmin" class="approval-banner" style="display: none;">
-                            <div style="font-size: 0.82rem; font-weight: 700; color: var(--danger); text-transform: uppercase;">⚠️ Human Approval Required</div>
-                            <div style="font-size: 0.8rem; color: #cbd5e1; margin-top: 4px;">Agent is waiting for your confirmation:</div>
-                            <div class="action-grid">
+                            <div id="approvalTitleAdmin" style="font-size: 0.82rem; font-weight: 700; color: var(--danger); text-transform: uppercase;">⚠️ Human Approval Required</div>
+                            <div id="approvalDescAdmin" style="font-size: 0.8rem; color: #cbd5e1; margin-top: 4px;">Agent is waiting for your confirmation:</div>
+                            <div id="promptQuoteAdmin" class="prompt-quote-admin" style="display: none;"></div>
+                            <div id="confirmActionsAdmin" class="action-grid">
                                 <button class="btn-act btn-act-app" data-action="approve">✓ APPROVE (Y)</button>
                                 <button class="btn-act btn-act-rej" data-action="reject">✕ REJECT (N)</button>
+                            </div>
+                            <div id="questionActionsAdmin" class="action-grid" style="display: none;">
+                                <button type="button" id="btnFocusReplyAdmin" class="btn-act btn-act-reply">✍️ Write Answer Below</button>
+                                <button type="button" class="btn-act btn-act-sec" data-action="enter">↵ Send Enter</button>
+                                <button type="button" class="btn-act btn-act-sec" data-action="esc">⎋ Cancel (Esc)</button>
                             </div>
                         </div>
                     </div>
@@ -1195,7 +1796,7 @@ const adminTemplate = `<!DOCTYPE html>
                     <button class="btn-quick" data-action="enter">↵ Enter</button>
                     <button class="btn-quick" data-action="esc">⎋ Esc</button>
                 </div>
-                <div class="chat-input-pill">
+                <div id="adminInputPill" class="chat-input-pill">
                     <input type="text" id="adminInput" class="txt-chat" placeholder="Reply to agent or send instruction...">
                     <button class="btn-arrow-send" data-fn="sendAdminInput" title="Send">↑</button>
                 </div>
@@ -1325,6 +1926,18 @@ const adminTemplate = `<!DOCTYPE html>
     const termSnippetAdmin = document.getElementById('terminalSnippetAdmin');
     const rawBodyAdmin = document.getElementById('adminRawBody');
     const approvalBanner = document.getElementById('approvalBannerAdmin');
+    const approvalTitleAdmin = document.getElementById('approvalTitleAdmin');
+    const approvalDescAdmin = document.getElementById('approvalDescAdmin');
+    const promptQuoteAdmin = document.getElementById('promptQuoteAdmin');
+    const confirmActionsAdmin = document.getElementById('confirmActionsAdmin');
+    const questionActionsAdmin = document.getElementById('questionActionsAdmin');
+    const adminStateBanner = document.getElementById('adminStateBanner');
+    const adminStateLabel = document.getElementById('adminStateLabel');
+    const adminAgentBubble = document.getElementById('adminAgentBubble');
+    const agentTextAdminEl = document.getElementById('agentTextAdmin');
+    const adminInputPill = document.getElementById('adminInputPill');
+    const adminInputEl = document.getElementById('adminInput');
+    const btnJumpTermAdmin = document.getElementById('btnJumpTermAdmin');
     const clientsTable = document.getElementById('clientsTable');
     const clientCount = document.getElementById('clientCount');
     const clientCountTab = document.getElementById('clientCountTab');
@@ -1332,10 +1945,86 @@ const adminTemplate = `<!DOCTYPE html>
     const adminAgentRow = document.getElementById('adminAgentRow');
     const adminAgentTimeEl = document.getElementById('adminAgentTime');
     let adminLastOutput = '';
+    let adminLastRenderSig = '';
     let adminWasWaiting = false;
     let adminMoveAgentAfterUser = false;
     let adminCurrentPaneID = '';
     const adminPaneSelect = document.getElementById('adminPaneSelect');
+
+    function createAdminScrollTracker(el, jumpBtn) {
+        let pinned = true;
+        let programmatic = false;
+        const checkPinned = () => {
+            if (!el) return true;
+            return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 48;
+        };
+        if (el) {
+            el.addEventListener('scroll', () => {
+                if (programmatic) return;
+                pinned = checkPinned();
+                if (jumpBtn) {
+                    jumpBtn.style.display = pinned ? 'none' : 'block';
+                }
+            }, { passive: true });
+        }
+        if (jumpBtn && el) {
+            jumpBtn.addEventListener('click', () => {
+                pinned = true;
+                programmatic = true;
+                el.scrollTop = el.scrollHeight;
+                jumpBtn.style.display = 'none';
+                setTimeout(() => { programmatic = false; }, 50);
+            });
+        }
+        return {
+            isPinned: () => pinned,
+            update: (mutateFn) => {
+                if (!el) { mutateFn(); return; }
+                const wasPinned = pinned;
+                const prevTop = el.scrollTop;
+                programmatic = true;
+                mutateFn();
+                if (wasPinned) {
+                    el.scrollTop = el.scrollHeight;
+                    if (jumpBtn) jumpBtn.style.display = 'none';
+                } else {
+                    el.scrollTop = prevTop;
+                    if (jumpBtn) jumpBtn.style.display = 'block';
+                }
+                setTimeout(() => { programmatic = false; }, 50);
+            },
+            scrollToBottom: () => {
+                if (!el) return;
+                pinned = true;
+                programmatic = true;
+                el.scrollTop = el.scrollHeight;
+                if (jumpBtn) jumpBtn.style.display = 'none';
+                setTimeout(() => { programmatic = false; }, 50);
+            }
+        };
+    }
+
+    const adminChatTracker = createAdminScrollTracker(chatBody, null);
+    const adminTermTracker = createAdminScrollTracker(termSnippetAdmin, btnJumpTermAdmin);
+    const adminRawTracker = createAdminScrollTracker(rawBodyAdmin, null);
+
+    function adminPaneStateTag(p) {
+        if (p.waiting) {
+            return p.prompt_type === 'question' ? '❓ ' : '🛑 ';
+        }
+        if (p.agent_state === 'working') return '⚡ ';
+        if (p.agent_state === 'idle' || p.agent_state === 'done') return '💤 ';
+        return '• ';
+    }
+
+    function adminPaneStateSuffix(p) {
+        if (p.waiting) {
+            return p.prompt_type === 'question' ? ' [QUESTION]' : ' [APPROVAL]';
+        }
+        if (p.agent_state === 'working') return ' [WORKING]';
+        if (p.agent_state === 'idle' || p.agent_state === 'done') return ' [IDLE]';
+        return '';
+    }
 
     function renderAdminPanes(panes, selectedPane) {
         if (!adminPaneSelect || !panes) return;
@@ -1343,9 +2032,8 @@ const adminTemplate = `<!DOCTYPE html>
         const prevSig = Array.from(adminPaneSelect.options).map(o => o.value + '|' + o.textContent).join(';;');
         const opts = [{ value: '', label: 'Auto (Blocked first)' }];
         panes.forEach(p => {
-            const flag = p.waiting ? '⚠️ ' : '';
             const title = p.title ? (' · ' + p.title) : '';
-            opts.push({ value: p.pane_id, label: flag + p.pane_id + title });
+            opts.push({ value: p.pane_id, label: adminPaneStateTag(p) + p.pane_id + title + adminPaneStateSuffix(p) });
         });
         const nextSig = opts.map(o => o.value + '|' + o.label).join(';;');
         if (prevSig !== nextSig) {
@@ -1362,6 +2050,10 @@ const adminTemplate = `<!DOCTYPE html>
 
     if (adminPaneSelect) {
         adminPaneSelect.addEventListener('change', () => {
+            adminLastRenderSig = '';
+            adminTermTracker.scrollToBottom();
+            adminRawTracker.scrollToBottom();
+            adminChatTracker.scrollToBottom();
             fetch('/api/panes/select', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -1402,11 +2094,120 @@ const adminTemplate = `<!DOCTYPE html>
         ` + "`" + `;
         chatBody.appendChild(row);
         adminMoveAgentAfterUser = true;
-        chatBody.scrollTop = chatBody.scrollHeight;
+        adminChatTracker.scrollToBottom();
     }
 
     function escapeHTML(str) {
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        if (!str) return '';
+        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function formatAdminTerminalWithHighlight(output, waiting, promptType, promptText) {
+        if (!output) return '';
+        if (!waiting || !promptText) {
+            return escapeHTML(output);
+        }
+        const cls = promptType === 'question' ? 'term-highlight-question' : 'term-highlight-confirm';
+        const idx = output.lastIndexOf(promptText);
+        if (idx !== -1) {
+            const before = output.slice(0, idx);
+            const match = output.slice(idx, idx + promptText.length);
+            const after = output.slice(idx + promptText.length);
+            return escapeHTML(before) + '<span class="' + cls + '">' + escapeHTML(match) + '</span>' + escapeHTML(after);
+        }
+        const lines = promptText.split('\n').filter(Boolean);
+        const lastLine = lines.length > 0 ? lines[lines.length - 1] : '';
+        if (lastLine) {
+            const lIdx = output.lastIndexOf(lastLine);
+            if (lIdx !== -1) {
+                const before = output.slice(0, lIdx);
+                const match = output.slice(lIdx);
+                return escapeHTML(before) + '<span class="' + cls + '">' + escapeHTML(match) + '</span>';
+            }
+        }
+        return escapeHTML(output);
+    }
+
+    function updateAdminStateUI(data) {
+        const isWaiting = Boolean(data.waiting);
+        const isQuestion = isWaiting && data.prompt_type === 'question';
+        const isWorking = !isWaiting && data.agent_state === 'working';
+        const isOffline = data.herdr_online === false;
+        const paneLabel = data.pane_id ? (' [' + data.pane_id + ']') : '';
+
+        adminStateBanner.className = 'admin-state-banner';
+        adminAgentBubble.className = 'bubble';
+
+        if (isOffline) {
+            adminStateBanner.classList.add('state-offline');
+            adminStateLabel.textContent = '⚪ OFFLINE — Herdr / tmux inactive';
+            paneBadge.style.color = 'var(--text-dim)';
+            paneBadge.innerText = '⚪ Offline • No active pane';
+            if (agentTextAdminEl) agentTextAdminEl.textContent = 'No active agent terminal detected.';
+        } else if (isQuestion) {
+            adminStateBanner.classList.add('state-question');
+            adminAgentBubble.classList.add('card-question');
+            adminStateLabel.textContent = '❓ WAITING FOR REPLY' + paneLabel + ' — Agent asked a question';
+            paneBadge.style.color = 'var(--warning)';
+            paneBadge.innerText = '❓ QUESTION / INPUT REQUIRED • Pane ' + (data.pane_id || 'active');
+            if (agentTextAdminEl) agentTextAdminEl.textContent = 'Agent is paused waiting for a written reply:';
+        } else if (isWaiting) {
+            adminStateBanner.classList.add('state-confirm');
+            adminAgentBubble.classList.add('card-confirm');
+            adminStateLabel.textContent = '🛑 APPROVAL REQUIRED' + paneLabel + ' — Yes / No confirmation';
+            paneBadge.style.color = 'var(--danger)';
+            paneBadge.innerText = '🛑 APPROVAL REQUIRED (YES/NO) • Pane ' + (data.pane_id || 'active');
+            if (agentTextAdminEl) agentTextAdminEl.textContent = 'Agent is paused waiting for human confirmation:';
+        } else if (isWorking) {
+            adminStateBanner.classList.add('state-working');
+            adminAgentBubble.classList.add('card-working');
+            adminStateLabel.textContent = '⚡ WORKING' + paneLabel + ' — Agent is actively executing...';
+            paneBadge.style.color = 'var(--accent)';
+            paneBadge.innerText = '⚡ WORKING • Pane ' + (data.pane_id || 'active');
+            if (agentTextAdminEl) agentTextAdminEl.textContent = 'Agent is actively executing tasks and streaming output:';
+        } else {
+            adminStateBanner.classList.add('state-idle');
+            adminAgentBubble.classList.add('card-idle');
+            adminStateLabel.textContent = '💤 IDLE / READY' + paneLabel + ' — Waiting for next instruction';
+            paneBadge.style.color = 'var(--success)';
+            paneBadge.innerText = '💤 IDLE / READY • Pane ' + (data.pane_id || 'active');
+            if (agentTextAdminEl) agentTextAdminEl.textContent = 'Agent finished its turn and is ready for instructions:';
+        }
+
+        if (isWaiting) {
+            approvalBanner.style.display = 'block';
+            if (isQuestion) {
+                approvalBanner.classList.add('question-mode');
+                approvalTitleAdmin.style.color = '#fbbf24';
+                approvalTitleAdmin.textContent = '❓ Question — Written Reply Required';
+                approvalDescAdmin.textContent = 'This prompt is asking a question (not Yes/No). Write your answer below:';
+                confirmActionsAdmin.style.display = 'none';
+                questionActionsAdmin.style.display = 'flex';
+                if (adminInputPill) adminInputPill.classList.add('awaiting-reply');
+                if (adminInputEl) adminInputEl.placeholder = '✍️ Type your answer to the agent question...';
+            } else {
+                approvalBanner.classList.remove('question-mode');
+                approvalTitleAdmin.style.color = 'var(--danger)';
+                approvalTitleAdmin.textContent = '⚠️ Human Approval Required (Yes / No)';
+                approvalDescAdmin.textContent = 'Agent is waiting for your confirmation:';
+                confirmActionsAdmin.style.display = 'flex';
+                questionActionsAdmin.style.display = 'none';
+                if (adminInputPill) adminInputPill.classList.remove('awaiting-reply');
+                if (adminInputEl) adminInputEl.placeholder = 'Reply to agent or send instruction...';
+            }
+
+            if (data.prompt_text) {
+                promptQuoteAdmin.style.display = 'block';
+                promptQuoteAdmin.textContent = data.prompt_text;
+            } else {
+                promptQuoteAdmin.style.display = 'none';
+                promptQuoteAdmin.textContent = '';
+            }
+        } else {
+            approvalBanner.style.display = 'none';
+            if (adminInputPill) adminInputPill.classList.remove('awaiting-reply');
+            if (adminInputEl) adminInputEl.placeholder = 'Reply to agent or send instruction...';
+        }
     }
 
     function connect() {
@@ -1423,42 +2224,59 @@ const adminTemplate = `<!DOCTYPE html>
             try {
                 const data = JSON.parse(event.data);
                 const outputChanged = data.output !== undefined && data.output !== adminLastOutput;
-                if (data.output !== undefined) {
+                const renderSig = [
+                    data.output || '',
+                    data.waiting ? '1' : '0',
+                    data.prompt_type || '',
+                    data.prompt_text || ''
+                ].join('||');
+
+                if (data.output !== undefined && renderSig !== adminLastRenderSig) {
                     adminLastOutput = data.output;
+                    adminLastRenderSig = renderSig;
                     if (outputChanged && adminAgentTimeEl) {
                         adminAgentTimeEl.innerText = nowTimeStr();
                     }
-                    termSnippetAdmin.innerText = data.output;
-                    rawBodyAdmin.innerText = data.output;
-                    termSnippetAdmin.scrollTop = termSnippetAdmin.scrollHeight;
-                    rawBodyAdmin.scrollTop = rawBodyAdmin.scrollHeight;
+                    adminTermTracker.update(() => {
+                        termSnippetAdmin.innerHTML = formatAdminTerminalWithHighlight(
+                            data.output,
+                            data.waiting,
+                            data.prompt_type,
+                            data.prompt_text
+                        );
+                    });
+                    adminRawTracker.update(() => {
+                        rawBodyAdmin.innerText = data.output;
+                    });
                 }
 
                 if (data.pane_id) {
                     adminCurrentPaneID = data.pane_id;
-                    paneBadge.innerText = ` + "`" + `Active Pane: ${data.pane_id} • Status: ${data.agent_state || 'ready'}` + "`" + `;
                 }
                 if (data.panes) {
                     renderAdminPanes(data.panes, data.selected_pane);
                 }
 
+                updateAdminStateUI(data);
+
                 if (data.waiting) {
-                    approvalBanner.style.display = 'block';
                     if (!adminWasWaiting) {
-                        chatBody.appendChild(adminAgentRow);
+                        adminChatTracker.update(() => {
+                            chatBody.appendChild(adminAgentRow);
+                        });
                         adminMoveAgentAfterUser = false;
                         adminWasWaiting = true;
                     }
                 } else {
-                    approvalBanner.style.display = 'none';
                     adminWasWaiting = false;
                 }
 
                 if (adminMoveAgentAfterUser && outputChanged) {
-                    chatBody.appendChild(adminAgentRow);
+                    adminChatTracker.update(() => {
+                        chatBody.appendChild(adminAgentRow);
+                    });
                     adminMoveAgentAfterUser = false;
                 }
-                chatBody.scrollTop = chatBody.scrollHeight;
 
                 if (data.clients) {
                     renderClients(data.clients);
@@ -1690,8 +2508,10 @@ const adminTemplate = `<!DOCTYPE html>
         });
     }
 
-    function sendAction(action) {
-        appendUserMessage(action.toUpperCase());
+    function dispatchAdminAction(action, displayLabel) {
+        if (displayLabel) {
+            appendUserMessage(displayLabel);
+        }
         const params = { action: action };
         if (adminCurrentPaneID) {
             params.pane_id = adminCurrentPaneID;
@@ -1703,12 +2523,15 @@ const adminTemplate = `<!DOCTYPE html>
         });
     }
 
+    function sendAction(action) {
+        dispatchAdminAction(action, action.toUpperCase());
+    }
+
     function sendAdminInput() {
         const input = document.getElementById('adminInput');
         const val = input.value.trim();
         if (!val) return;
-        appendUserMessage(val);
-        sendAction(val);
+        dispatchAdminAction(val, val);
         input.value = '';
     }
 
@@ -1722,6 +2545,13 @@ const adminTemplate = `<!DOCTYPE html>
     }
 
     document.addEventListener('click', (e) => {
+        if (e.target.closest('#btnFocusReplyAdmin')) {
+            if (adminInputEl) {
+                adminInputEl.focus();
+                adminInputEl.scrollIntoView({ block: 'nearest' });
+            }
+            return;
+        }
         const secBtn = e.target.closest('[data-section]');
         if (secBtn) {
             switchAdminSection(secBtn.dataset.section);
@@ -1744,7 +2574,6 @@ const adminTemplate = `<!DOCTYPE html>
             if (fn) fn();
         }
     });
-    const adminInputEl = document.getElementById('adminInput');
     if (adminInputEl) {
         adminInputEl.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') sendAdminInput();
