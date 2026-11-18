@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"guaita/herdr"
 	"github.com/gorilla/websocket"
+	"guaita/herdr"
+	"guaita/notify"
 )
 
 func TestIsLoopback(t *testing.T) {
@@ -179,6 +180,73 @@ func TestHandleAction_LocalhostAuthorized(t *testing.T) {
 	}
 	if capturedAction != "approve" {
 		t.Errorf("expected captured action 'approve', got %s", capturedAction)
+	}
+}
+
+func TestActionsSharePendingStateAcrossWebAndTelegram(t *testing.T) {
+	dispatcher := notify.NewDispatcher()
+	srv := New(Config{SessionToken: "secret123", Dispatcher: dispatcher})
+	var calls int
+	srv.actionPaneSender = func(paneID, action string) error {
+		calls++
+		if paneID != "%4" || action != "approve" {
+			t.Fatalf("unexpected action (%q, %q)", paneID, action)
+		}
+		return nil
+	}
+	dispatcher.SyncWaitingPanes([]notify.NotificationEvent{{PaneID: "%4", Body: "Approve?"}})
+
+	form := url.Values{"action": {"approve"}, "pane_id": {"%4"}}
+	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(form.Encode()))
+	req.RemoteAddr = "127.0.0.1:44444"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.HandleAction(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected web action to succeed, got %d", rec.Code)
+	}
+	if err := srv.HandleTelegramAction("approve:%4"); !errors.Is(err, errApprovalConsumed) {
+		t.Fatalf("expected stale Telegram action to be rejected, got %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected exactly one agent action, got %d", calls)
+	}
+
+	status := herdr.AgentStatus{
+		Waiting: true,
+		PaneID:  "%4",
+		Panes:   []herdr.PaneSummary{{PaneID: "%4", Waiting: true}},
+	}
+	srv.maskConsumedWaiting(&status)
+	if status.Waiting || status.Panes[0].Waiting {
+		t.Fatal("expected web status to hide the consumed request")
+	}
+}
+
+func TestTelegramActionPreventsRepeatedWebApproval(t *testing.T) {
+	dispatcher := notify.NewDispatcher()
+	srv := New(Config{SessionToken: "secret123", Dispatcher: dispatcher})
+	var calls int
+	srv.actionPaneSender = func(_, _ string) error {
+		calls++
+		return nil
+	}
+	dispatcher.SyncWaitingPanes([]notify.NotificationEvent{{PaneID: "%8"}})
+	if err := srv.HandleTelegramAction("reject:%8"); err != nil {
+		t.Fatalf("expected Telegram action to succeed: %v", err)
+	}
+
+	form := url.Values{"action": {"reject"}, "pane_id": {"%8"}}
+	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(form.Encode()))
+	req.RemoteAddr = "127.0.0.1:44444"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	srv.HandleAction(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate web action to return 409, got %d", rec.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("expected one dispatch, got %d", calls)
 	}
 }
 
@@ -402,7 +470,6 @@ func TestHandleManifestAndSW(t *testing.T) {
 		t.Errorf("unexpected content-type: %s", recSW.Header().Get("Content-Type"))
 	}
 }
-
 
 func TestHandleSelectPane_AndPaneRouting(t *testing.T) {
 	srv := New(Config{SessionToken: "pane-secret"})

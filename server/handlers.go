@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -14,10 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"guaita/config"
 	"guaita/herdr"
 	"guaita/notify"
-	"github.com/gorilla/websocket"
 )
 
 const (
@@ -135,6 +136,8 @@ func generateRandomHex(numBytes int) string {
 }
 
 const maxAuditEntries = 200
+
+var errApprovalConsumed = errors.New("approval request has already been handled")
 
 // AuditEntry records a security or remote-control event for the localhost admin.
 type AuditEntry struct {
@@ -666,17 +669,17 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 		pairingURL := s.PairingURL()
 		ntfyURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(s.cfg.NtfyServer, "/"), s.cfg.NtfyTopic)
 		data := AdminPageData{
-			PairingURL:      pairingURL,
-			QRCodeBase64:    GenerateQRBase64(pairingURL),
-			SessionDays:     s.cfg.SessionDays,
-			SessionToken:    s.Token(),
-			LocalIP:         s.cfg.LocalIP,
-			Port:            s.cfg.Port,
-			NtfyTopic:       s.cfg.NtfyTopic,
-			NtfyURL:         ntfyURL,
-			NtfyQRBase64:    GenerateQRBase64(ntfyURL),
-			TelegramActive:  s.cfg.TelegramEnabled,
-			CSPNonce:        nonce,
+			PairingURL:     pairingURL,
+			QRCodeBase64:   GenerateQRBase64(pairingURL),
+			SessionDays:    s.cfg.SessionDays,
+			SessionToken:   s.Token(),
+			LocalIP:        s.cfg.LocalIP,
+			Port:           s.cfg.Port,
+			NtfyTopic:      s.cfg.NtfyTopic,
+			NtfyURL:        ntfyURL,
+			NtfyQRBase64:   GenerateQRBase64(ntfyURL),
+			TelegramActive: s.cfg.TelegramEnabled,
+			CSPNonce:       nonce,
 		}
 		setCSPWithNonce(w, nonce)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -805,6 +808,64 @@ func (s *Server) sendPaneAction(paneID, action string) error {
 	return herdr.SendActionToPane(paneID, action)
 }
 
+func (s *Server) sendCoordinatedAction(paneID, action string, requirePending bool) error {
+	s.mu.RLock()
+	dispatcher := s.cfg.Dispatcher
+	s.mu.RUnlock()
+
+	claim := notify.ClaimMissing
+	if dispatcher != nil {
+		claim = dispatcher.ClaimWaiting(paneID)
+	}
+	if claim == notify.ClaimConsumed {
+		return errApprovalConsumed
+	}
+	if requirePending && claim == notify.ClaimMissing {
+		return errApprovalConsumed
+	}
+
+	err := s.sendPaneAction(paneID, action)
+	if claim == notify.ClaimAcquired {
+		dispatcher.FinishWaiting(paneID, action, err == nil)
+	}
+	return err
+}
+
+// HandleTelegramAction routes a Telegram callback through the shared approval state.
+func (s *Server) HandleTelegramAction(rawAction string) error {
+	paneID, action, ok := notify.ParseTelegramAction(rawAction)
+	if !ok {
+		return errors.New("unsupported action")
+	}
+	if paneID == "" {
+		s.mu.RLock()
+		paneID = s.selectedPane
+		s.mu.RUnlock()
+	}
+	return s.sendCoordinatedAction(paneID, action, true)
+}
+
+func (s *Server) maskConsumedWaiting(status *herdr.AgentStatus) {
+	s.mu.RLock()
+	dispatcher := s.cfg.Dispatcher
+	s.mu.RUnlock()
+	if dispatcher == nil {
+		return
+	}
+	if status.Waiting && dispatcher.IsWaitingConsumed(status.PaneID) {
+		status.Waiting = false
+	}
+	if len(status.Panes) == 0 {
+		return
+	}
+	status.Panes = append([]herdr.PaneSummary(nil), status.Panes...)
+	for i := range status.Panes {
+		if status.Panes[i].Waiting && dispatcher.IsWaitingConsumed(status.Panes[i].PaneID) {
+			status.Panes[i].Waiting = false
+		}
+	}
+}
+
 // StartMonitor polls statusProvider in the background and dispatches notifications
 // even when no browser or mobile WebSocket client is connected.
 func (s *Server) StartMonitor(stop <-chan struct{}) {
@@ -886,6 +947,7 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		status, waiting, preferred, _ := s.pollStatus()
 		s.dispatchWaitingStatuses(waiting)
+		s.maskConsumedWaiting(&status)
 
 		payload := wsPayload{
 			Output:       status.Output,
@@ -987,8 +1049,15 @@ func (s *Server) HandleAction(w http.ResponseWriter, r *http.Request) {
 		if paneID != "" {
 			detail = fmt.Sprintf("[%s] %s", paneID, clean)
 		}
+		if err := s.sendCoordinatedAction(paneID, clean, false); err != nil {
+			if errors.Is(err, errApprovalConsumed) {
+				http.Error(w, "Conflict: approval request already handled", http.StatusConflict)
+				return
+			}
+			http.Error(w, "Bad Gateway: failed to dispatch action", http.StatusBadGateway)
+			return
+		}
 		s.RecordAudit(s.effectiveRemoteIP(r), "ACTION", detail)
-		_ = s.sendPaneAction(paneID, clean)
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -1220,12 +1289,8 @@ func (s *Server) HandleTelegramConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tg := notify.NewTelegram(botToken, chatID, func(rawAction string) {
-		if paneID, act, ok := notify.ParseTelegramAction(rawAction); ok && paneID != "" {
-			_ = s.sendPaneAction(paneID, act)
-			return
-		}
-		_ = s.sendPaneAction("", rawAction)
+	tg := notify.NewTelegram(botToken, chatID, func(rawAction string) error {
+		return s.HandleTelegramAction(rawAction)
 	})
 	s.telegramNotifier = tg
 	s.cfg.TelegramEnabled = true

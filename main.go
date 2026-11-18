@@ -16,13 +16,13 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/skip2/go-qrcode"
 	"guaita/config"
-	"guaita/herdr"
 	"guaita/notify"
 	"guaita/server"
-	"github.com/skip2/go-qrcode"
 )
 
 func generateToken() string {
@@ -229,13 +229,14 @@ func main() {
 
 	telegramActive := false
 	var tgNotifier *notify.TelegramNotifier
+	var serverRef atomic.Pointer[server.Server]
 	if *telegramToken != "" && *telegramChatID != "" {
-		tgNotifier = notify.NewTelegram(*telegramToken, *telegramChatID, func(rawAction string) {
-			if paneID, act, ok := notify.ParseTelegramAction(rawAction); ok && paneID != "" {
-				_ = herdr.SendActionToPane(paneID, act)
-				return
+		tgNotifier = notify.NewTelegram(*telegramToken, *telegramChatID, func(rawAction string) error {
+			currentServer := serverRef.Load()
+			if currentServer == nil {
+				return fmt.Errorf("server is still starting")
 			}
-			_ = herdr.SendAction(rawAction)
+			return currentServer.HandleTelegramAction(rawAction)
 		})
 		dispatcher.Register(tgNotifier)
 		telegramActive = true
@@ -276,6 +277,7 @@ func main() {
 		TelegramEnabled:  telegramActive,
 		ConfigPath:       cfgPath,
 	})
+	serverRef.Store(srv)
 
 	addr := fmt.Sprintf("0.0.0.0:%s", *port)
 	go srv.StartMonitor(nil)

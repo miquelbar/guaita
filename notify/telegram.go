@@ -18,19 +18,29 @@ type TelegramNotifier struct {
 	Token    string
 	ChatID   string
 	Client   *http.Client
-	onAction func(string)
+	onAction func(string) error
 	stopOnce sync.Once
 	stopChan chan struct{}
+	mu       sync.Mutex
+	messages map[string]telegramMessage
+	resolved map[string]string
+}
+
+type telegramMessage struct {
+	ID   int64
+	Text string
 }
 
 // NewTelegram creates a TelegramNotifier and starts the callback query listener if enabled.
-func NewTelegram(token, chatID string, onAction func(string)) *TelegramNotifier {
+func NewTelegram(token, chatID string, onAction func(string) error) *TelegramNotifier {
 	t := &TelegramNotifier{
 		Token:    token,
 		ChatID:   chatID,
 		Client:   &http.Client{Timeout: 10 * time.Second},
 		onAction: onAction,
 		stopChan: make(chan struct{}),
+		messages: make(map[string]telegramMessage),
+		resolved: make(map[string]string),
 	}
 
 	if token != "" && chatID != "" && onAction != nil {
@@ -64,6 +74,21 @@ func (t *TelegramNotifier) Close() {
 	t.stopOnce.Do(func() {
 		close(t.stopChan)
 	})
+}
+
+// BeginPending clears state from the preceding request before async delivery begins.
+func (t *TelegramNotifier) BeginPending(paneID string) {
+	key := paneKey(paneID)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.messages == nil {
+		t.messages = make(map[string]telegramMessage)
+	}
+	if t.resolved == nil {
+		t.resolved = make(map[string]string)
+	}
+	delete(t.messages, key)
+	delete(t.resolved, key)
 }
 
 // Notify sends an alert message with inline buttons to the configured Telegram chat.
@@ -104,6 +129,7 @@ func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 			"inline_keyboard": keyboard,
 		},
 	}
+	key := paneKey(event.PaneID)
 
 	jsonBytes, err := json.Marshal(payload)
 	if err != nil {
@@ -128,6 +154,81 @@ func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 		return fmt.Errorf("telegram returned HTTP %d: %s", resp.StatusCode, string(errBody))
 	}
 
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && result.OK && result.Result.MessageID != 0 {
+		t.mu.Lock()
+		if t.messages == nil {
+			t.messages = make(map[string]telegramMessage)
+		}
+		t.messages[key] = telegramMessage{ID: result.Result.MessageID, Text: messageText}
+		resolvedAction := t.resolved[key]
+		t.mu.Unlock()
+		if resolvedAction != "" {
+			return t.Resolve(event.PaneID, resolvedAction)
+		}
+	}
+
+	return nil
+}
+
+// Resolve replaces an active Telegram keyboard with a permanent action result.
+func (t *TelegramNotifier) Resolve(paneID, action string) error {
+	if t.Token == "" || t.ChatID == "" {
+		return nil
+	}
+
+	key := paneKey(paneID)
+	t.mu.Lock()
+	if t.resolved == nil {
+		t.resolved = make(map[string]string)
+	}
+	t.resolved[key] = action
+	message, ok := t.messages[key]
+	t.mu.Unlock()
+	if !ok || message.ID == 0 {
+		return nil
+	}
+
+	label := "✅ RESPONSE SENT"
+	switch strings.ToLower(action) {
+	case "approve", "yes", "y":
+		label = "✅ APPROVED"
+	case "reject", "no", "n":
+		label = "❌ REJECTED"
+	}
+	payload := map[string]interface{}{
+		"chat_id":    t.ChatID,
+		"message_id": message.ID,
+		"text":       message.Text + "\n\n<b>" + label + "</b>",
+		"parse_mode": "HTML",
+		"reply_markup": map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{},
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/editMessageText", t.Token)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return fmt.Errorf("telegram resolution update returned HTTP %d: %s", resp.StatusCode, string(errBody))
+	}
 	return nil
 }
 
@@ -193,8 +294,9 @@ func (t *TelegramNotifier) pollUpdates() {
 						t.answerCallbackQuery(u.CallbackQuery.ID, "Unsupported action")
 						continue
 					}
-					t.onAction(u.CallbackQuery.Data)
-					if paneID != "" {
+					if err := t.onAction(u.CallbackQuery.Data); err != nil {
+						t.answerCallbackQuery(u.CallbackQuery.ID, err.Error())
+					} else if paneID != "" {
 						t.answerCallbackQuery(u.CallbackQuery.ID, fmt.Sprintf("Action '%s' sent to %s!", action, paneID))
 					} else {
 						t.answerCallbackQuery(u.CallbackQuery.ID, fmt.Sprintf("Action '%s' dispatched!", action))

@@ -17,6 +17,16 @@ type mockNotifier struct {
 	events []NotificationEvent
 }
 
+type mockResolutionNotifier struct {
+	mockNotifier
+	resolved chan string
+}
+
+func (m *mockResolutionNotifier) Resolve(paneID, action string) error {
+	m.resolved <- paneID + ":" + action
+	return nil
+}
+
 func (m *mockNotifier) Name() string { return "mock" }
 func (m *mockNotifier) Notify(e NotificationEvent) error {
 	m.mu.Lock()
@@ -249,7 +259,6 @@ func TestWebPushStore_ManifestAndSW(t *testing.T) {
 	}
 }
 
-
 func TestDispatcher_SyncWaitingPanes(t *testing.T) {
 	d := NewDispatcher()
 	mock := &mockNotifier{}
@@ -298,6 +307,116 @@ func TestDispatcher_SyncWaitingPanes(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if getCalls() != 3 {
 		t.Fatalf("expected 3 notifications after w1:p1 re-blocked, got %d", getCalls())
+	}
+}
+
+func TestDispatcher_ApprovalCanOnlyBeConsumedOnce(t *testing.T) {
+	d := NewDispatcher()
+	notifier := &mockResolutionNotifier{resolved: make(chan string, 1)}
+	d.Register(notifier)
+	d.SyncWaitingPanes([]NotificationEvent{{PaneID: "%7", Body: "Approve?"}})
+
+	if got := d.ClaimWaiting("%7"); got != ClaimAcquired {
+		t.Fatalf("expected first claim to acquire request, got %v", got)
+	}
+	if got := d.ClaimWaiting("%7"); got != ClaimConsumed {
+		t.Fatalf("expected concurrent claim to be consumed, got %v", got)
+	}
+	d.FinishWaiting("%7", "approve", true)
+	if !d.IsWaitingConsumed("%7") {
+		t.Fatal("expected successful request to remain consumed while source is still waiting")
+	}
+
+	select {
+	case got := <-notifier.resolved:
+		if got != "%7:approve" {
+			t.Fatalf("unexpected resolution: %s", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected notifier resolution update")
+	}
+
+	d.SyncWaitingPanes([]NotificationEvent{{PaneID: "%7", Body: "Still stale"}})
+	if got := d.ClaimWaiting("%7"); got != ClaimConsumed {
+		t.Fatalf("expected stale waiting state to stay consumed, got %v", got)
+	}
+	d.SyncWaitingPanes(nil)
+	d.SyncWaitingPanes([]NotificationEvent{{PaneID: "%7", Body: "New request"}})
+	if got := d.ClaimWaiting("%7"); got != ClaimAcquired {
+		t.Fatalf("expected a new request after source cleared, got %v", got)
+	}
+}
+
+func TestDispatcher_FailedActionReopensRequest(t *testing.T) {
+	d := NewDispatcher()
+	d.SyncWaitingPanes([]NotificationEvent{{PaneID: "%3"}})
+	if got := d.ClaimWaiting("%3"); got != ClaimAcquired {
+		t.Fatalf("expected claim, got %v", got)
+	}
+	d.FinishWaiting("%3", "reject", false)
+	if got := d.ClaimWaiting("%3"); got != ClaimAcquired {
+		t.Fatalf("expected retry after failure, got %v", got)
+	}
+}
+
+func TestTelegramNotifier_ResolveEditsMessageAndRemovesButtons(t *testing.T) {
+	var requests []struct {
+		path    string
+		payload map[string]interface{}
+	}
+	client := &http.Client{Transport: mockTransport(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		requests = append(requests, struct {
+			path    string
+			payload map[string]interface{}
+		}{path: r.URL.Path, payload: payload})
+		body := `{"ok":true}`
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			body = `{"ok":true,"result":{"message_id":42}}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	tg := &TelegramNotifier{Token: "token", ChatID: "123", Client: client, messages: make(map[string]telegramMessage), resolved: make(map[string]string)}
+
+	if err := tg.Notify(NotificationEvent{PaneID: "%3", Body: "Approve changes?"}); err != nil {
+		t.Fatalf("notify failed: %v", err)
+	}
+	if err := tg.Resolve("%3", "approve"); err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if len(requests) != 2 || !strings.HasSuffix(requests[1].path, "/editMessageText") {
+		t.Fatalf("expected send followed by edit, got %+v", requests)
+	}
+	if !strings.Contains(requests[1].payload["text"].(string), "APPROVED") {
+		t.Fatalf("expected approved label, got %v", requests[1].payload["text"])
+	}
+	markup := requests[1].payload["reply_markup"].(map[string]interface{})
+	if buttons := markup["inline_keyboard"].([]interface{}); len(buttons) != 0 {
+		t.Fatalf("expected inline buttons to be removed, got %v", buttons)
+	}
+}
+
+func TestTelegramNotifier_ResolutionBeforeMessageRegistration(t *testing.T) {
+	var paths []string
+	client := &http.Client{Transport: mockTransport(func(r *http.Request) (*http.Response, error) {
+		paths = append(paths, r.URL.Path)
+		body := `{"ok":true}`
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			body = `{"ok":true,"result":{"message_id":73}}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	tg := &TelegramNotifier{Token: "token", ChatID: "123", Client: client, messages: make(map[string]telegramMessage), resolved: make(map[string]string)}
+	tg.BeginPending("%5")
+	if err := tg.Resolve("%5", "reject"); err != nil {
+		t.Fatalf("early resolution failed: %v", err)
+	}
+	if err := tg.Notify(NotificationEvent{PaneID: "%5", Body: "Reject changes?"}); err != nil {
+		t.Fatalf("notify failed: %v", err)
+	}
+	if len(paths) != 2 || !strings.HasSuffix(paths[0], "/sendMessage") || !strings.HasSuffix(paths[1], "/editMessageText") {
+		t.Fatalf("expected late message registration to trigger resolution edit, got %v", paths)
 	}
 }
 
