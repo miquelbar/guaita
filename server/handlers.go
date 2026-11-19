@@ -933,10 +933,6 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	isLocal := s.isLocalAdmin(r)
 	remoteIP := s.effectiveRemoteIP(r)
-	if !isLocal {
-		// Enforce at most one active remote WebSocket connection at any time.
-		s.hub.DisconnectRemote()
-	}
 
 	conn, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -959,7 +955,18 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	for {
+	// Start reader pump to consume client control frames (ping/pong/close)
+	stopReader := make(chan struct{})
+	go func() {
+		defer close(stopReader)
+		for {
+			if _, _, err := conn.NextReader(); err != nil {
+				return
+			}
+		}
+	}()
+
+	writeStatus := func() error {
 		status, waiting, preferred, _ := s.pollStatus()
 		s.dispatchWaitingStatuses(waiting)
 		s.maskConsumedWaiting(&status)
@@ -986,10 +993,27 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		if err := conn.WriteJSON(payload); err != nil {
-			break
+		_ = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		return conn.WriteJSON(payload)
+	}
+
+	// Send initial status frame immediately upon connection
+	if err := writeStatus(); err != nil {
+		return
+	}
+
+	ticker := time.NewTicker(s.cfg.PollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stopReader:
+			return
+		case <-ticker.C:
+			if err := writeStatus(); err != nil {
+				return
+			}
 		}
-		time.Sleep(s.cfg.PollInterval)
 	}
 }
 

@@ -597,7 +597,10 @@ const mobileTemplate = `<!DOCTYPE html>
     </div>
 
     <!-- Fullscreen terminal view -->
-    <div id="rawTerminalView" class="terminal-fullscreen"></div>
+    <div id="rawTerminalWrap" style="flex: 1; position: relative; display: none;">
+        <div id="rawTerminalView" class="terminal-fullscreen" style="display: block; width: 100%%; height: 100%%; box-sizing: border-box;"></div>
+        <button type="button" id="btnJumpRawMobile" class="btn-jump-bottom">↓ Bottom</button>
+    </div>
 
     <!-- Bottom ChatGPT-style bar -->
     <div class="bottom-bar">
@@ -628,6 +631,7 @@ const mobileTemplate = `<!DOCTYPE html>
     const connStatus = document.getElementById('connStatus');
     const termSnippet = document.getElementById('terminalSnippet');
     const rawTerminal = document.getElementById('rawTerminalView');
+    const rawTerminalWrap = document.getElementById('rawTerminalWrap');
     const approvalCard = document.getElementById('approvalCard');
     const approvalTitleMobile = document.getElementById('approvalTitleMobile');
     const approvalDescMobile = document.getElementById('approvalDescMobile');
@@ -644,6 +648,7 @@ const mobileTemplate = `<!DOCTYPE html>
     const mobileForm = document.getElementById('mobileInputForm');
     const userInputEl = document.getElementById('userInput');
     const btnJumpTermMobile = document.getElementById('btnJumpTermMobile');
+    const btnJumpRawMobile = document.getElementById('btnJumpRawMobile');
     let wasWaiting = false;
     let lastOutput = '';
     let lastRenderSig = '';
@@ -653,60 +658,92 @@ const mobileTemplate = `<!DOCTYPE html>
 
     function createScrollTracker(el, jumpBtn) {
         let pinned = true;
-        let programmatic = false;
+        let isTouching = false;
+        let pendingMutate = null;
+
         const checkPinned = () => {
             if (!el) return true;
-            return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 48;
+            // 15px tolerance buffer: prevents subpixel rounding issues while ensuring
+            // that user scrolling up (> 15px) immediately unpins and prevents rubber-banding down.
+            const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+            return dist <= 15;
         };
+
+        const updateJumpBtn = () => {
+            if (jumpBtn) {
+                jumpBtn.style.display = pinned ? 'none' : 'block';
+            }
+        };
+
         if (el) {
-            el.addEventListener('scroll', () => {
-                if (programmatic) return;
-                pinned = checkPinned();
-                if (jumpBtn) {
-                    jumpBtn.style.display = pinned ? 'none' : 'block';
+            el.addEventListener('touchstart', () => {
+                isTouching = true;
+            }, { passive: true });
+
+            const endTouch = () => {
+                isTouching = false;
+                if (pendingMutate) {
+                    const fn = pendingMutate;
+                    pendingMutate = null;
+                    tracker.update(fn);
                 }
+            };
+
+            el.addEventListener('touchend', endTouch, { passive: true });
+            el.addEventListener('touchcancel', endTouch, { passive: true });
+
+            el.addEventListener('wheel', () => {
+                pinned = checkPinned();
+                updateJumpBtn();
+            }, { passive: true });
+
+            el.addEventListener('scroll', () => {
+                pinned = checkPinned();
+                updateJumpBtn();
             }, { passive: true });
         }
+
         if (jumpBtn && el) {
             jumpBtn.addEventListener('click', () => {
                 pinned = true;
-                programmatic = true;
                 el.scrollTop = el.scrollHeight;
-                jumpBtn.style.display = 'none';
-                setTimeout(() => { programmatic = false; }, 50);
+                updateJumpBtn();
             });
         }
-        return {
+
+        const tracker = {
             isPinned: () => pinned,
             update: (mutateFn) => {
                 if (!el) { mutateFn(); return; }
+                if (isTouching) {
+                    // Do not mutate DOM or disturb user gesture while their finger is touching/swiping
+                    pendingMutate = mutateFn;
+                    return;
+                }
                 const wasPinned = pinned;
                 const prevTop = el.scrollTop;
-                programmatic = true;
                 mutateFn();
                 if (wasPinned) {
                     el.scrollTop = el.scrollHeight;
-                    if (jumpBtn) jumpBtn.style.display = 'none';
                 } else {
                     el.scrollTop = prevTop;
-                    if (jumpBtn) jumpBtn.style.display = 'block';
                 }
-                setTimeout(() => { programmatic = false; }, 50);
+                pinned = checkPinned();
+                updateJumpBtn();
             },
             scrollToBottom: () => {
                 if (!el) return;
                 pinned = true;
-                programmatic = true;
                 el.scrollTop = el.scrollHeight;
-                if (jumpBtn) jumpBtn.style.display = 'none';
-                setTimeout(() => { programmatic = false; }, 50);
+                updateJumpBtn();
             }
         };
+        return tracker;
     }
 
     const chatTracker = createScrollTracker(chatContainer, null);
     const termTracker = createScrollTracker(termSnippet, btnJumpTermMobile);
-    const rawTracker = createScrollTracker(rawTerminal, null);
+    const rawTracker = createScrollTracker(rawTerminal, btnJumpRawMobile);
 
     function paneStateTag(p) {
         if (p.waiting) {
@@ -787,12 +824,14 @@ const mobileTemplate = `<!DOCTYPE html>
     function switchView(mode) {
         if (mode === 'chat') {
             chatContainer.style.display = 'flex';
-            rawTerminal.style.display = 'none';
+            if (rawTerminalWrap) rawTerminalWrap.style.display = 'none';
+            else rawTerminal.style.display = 'none';
             document.getElementById('tabChat').classList.add('active');
             document.getElementById('tabTerminal').classList.remove('active');
         } else {
             chatContainer.style.display = 'none';
-            rawTerminal.style.display = 'block';
+            if (rawTerminalWrap) rawTerminalWrap.style.display = 'block';
+            else rawTerminal.style.display = 'block';
             document.getElementById('tabTerminal').classList.add('active');
             document.getElementById('tabChat').classList.remove('active');
         }
@@ -925,7 +964,22 @@ const mobileTemplate = `<!DOCTYPE html>
         }
     }
 
+    let reconnectTimer = null;
+    function scheduleReconnect() {
+        if (reconnectTimer) return;
+        connStatus.style.color = 'var(--danger)';
+        connStatus.innerText = '● Reconnecting...';
+        reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connect();
+        }, reconnectInterval);
+        reconnectInterval = Math.min(reconnectInterval * 1.5, 10000);
+    }
+
     function connect() {
+        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+            return;
+        }
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = new WebSocket(` + "`" + `${protocol}//${location.host}/ws` + "`" + `);
 
@@ -933,6 +987,10 @@ const mobileTemplate = `<!DOCTYPE html>
             connStatus.style.color = 'var(--success)';
             connStatus.innerText = '● Live Herdr Link';
             reconnectInterval = 1000;
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
         };
 
         ws.onmessage = (event) => {
@@ -999,13 +1057,12 @@ const mobileTemplate = `<!DOCTYPE html>
         };
 
         ws.onclose = () => {
-            connStatus.style.color = 'var(--danger)';
-            connStatus.innerText = '● Reconnecting...';
-            setTimeout(connect, reconnectInterval);
-            reconnectInterval = Math.min(reconnectInterval * 1.5, 10000);
+            scheduleReconnect();
         };
 
-        ws.onerror = () => { ws.close(); };
+        ws.onerror = (err) => {
+            console.warn("WebSocket error:", err);
+        };
     }
 
     function dispatchAction(action, displayLabel) {
@@ -1953,55 +2010,84 @@ const adminTemplate = `<!DOCTYPE html>
 
     function createAdminScrollTracker(el, jumpBtn) {
         let pinned = true;
-        let programmatic = false;
+        let isTouching = false;
+        let pendingMutate = null;
+
         const checkPinned = () => {
             if (!el) return true;
-            return (el.scrollHeight - el.scrollTop - el.clientHeight) <= 48;
+            const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+            return dist <= 15;
         };
+
+        const updateJumpBtn = () => {
+            if (jumpBtn) {
+                jumpBtn.style.display = pinned ? 'none' : 'block';
+            }
+        };
+
         if (el) {
-            el.addEventListener('scroll', () => {
-                if (programmatic) return;
-                pinned = checkPinned();
-                if (jumpBtn) {
-                    jumpBtn.style.display = pinned ? 'none' : 'block';
+            el.addEventListener('touchstart', () => {
+                isTouching = true;
+            }, { passive: true });
+
+            const endTouch = () => {
+                isTouching = false;
+                if (pendingMutate) {
+                    const fn = pendingMutate;
+                    pendingMutate = null;
+                    tracker.update(fn);
                 }
+            };
+
+            el.addEventListener('touchend', endTouch, { passive: true });
+            el.addEventListener('touchcancel', endTouch, { passive: true });
+
+            el.addEventListener('wheel', () => {
+                pinned = checkPinned();
+                updateJumpBtn();
+            }, { passive: true });
+
+            el.addEventListener('scroll', () => {
+                pinned = checkPinned();
+                updateJumpBtn();
             }, { passive: true });
         }
+
         if (jumpBtn && el) {
             jumpBtn.addEventListener('click', () => {
                 pinned = true;
-                programmatic = true;
                 el.scrollTop = el.scrollHeight;
-                jumpBtn.style.display = 'none';
-                setTimeout(() => { programmatic = false; }, 50);
+                updateJumpBtn();
             });
         }
-        return {
+
+        const tracker = {
             isPinned: () => pinned,
             update: (mutateFn) => {
                 if (!el) { mutateFn(); return; }
+                if (isTouching) {
+                    pendingMutate = mutateFn;
+                    return;
+                }
                 const wasPinned = pinned;
                 const prevTop = el.scrollTop;
-                programmatic = true;
                 mutateFn();
                 if (wasPinned) {
                     el.scrollTop = el.scrollHeight;
-                    if (jumpBtn) jumpBtn.style.display = 'none';
                 } else {
                     el.scrollTop = prevTop;
-                    if (jumpBtn) jumpBtn.style.display = 'block';
                 }
-                setTimeout(() => { programmatic = false; }, 50);
+                pinned = checkPinned();
+                updateJumpBtn();
             },
             scrollToBottom: () => {
                 if (!el) return;
                 pinned = true;
-                programmatic = true;
                 el.scrollTop = el.scrollHeight;
-                if (jumpBtn) jumpBtn.style.display = 'none';
-                setTimeout(() => { programmatic = false; }, 50);
+                updateJumpBtn();
             }
         };
+        return tracker;
     }
 
     const adminChatTracker = createAdminScrollTracker(chatBody, null);
@@ -2210,7 +2296,22 @@ const adminTemplate = `<!DOCTYPE html>
         }
     }
 
+    let adminReconnectTimer = null;
+    function scheduleAdminReconnect() {
+        if (adminReconnectTimer) return;
+        connStatus.style.color = 'var(--danger)';
+        connStatus.innerText = '● Reconnecting...';
+        adminReconnectTimer = setTimeout(() => {
+            adminReconnectTimer = null;
+            connect();
+        }, reconnectInterval);
+        reconnectInterval = Math.min(reconnectInterval * 1.5, 10000);
+    }
+
     function connect() {
+        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+            return;
+        }
         const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = new WebSocket(` + "`" + `${protocol}//${location.host}/ws` + "`" + `);
 
@@ -2218,6 +2319,10 @@ const adminTemplate = `<!DOCTYPE html>
             connStatus.style.color = 'var(--success)';
             connStatus.innerText = '● Live Herdr Link';
             reconnectInterval = 1000;
+            if (adminReconnectTimer) {
+                clearTimeout(adminReconnectTimer);
+                adminReconnectTimer = null;
+            }
         };
 
         ws.onmessage = (event) => {
@@ -2301,13 +2406,12 @@ const adminTemplate = `<!DOCTYPE html>
         };
 
         ws.onclose = () => {
-            connStatus.style.color = 'var(--danger)';
-            connStatus.innerText = '● Reconnecting...';
-            setTimeout(connect, reconnectInterval);
-            reconnectInterval = Math.min(reconnectInterval * 1.5, 10000);
+            scheduleAdminReconnect();
         };
 
-        ws.onerror = () => { ws.close(); };
+        ws.onerror = (err) => {
+            console.warn("WebSocket error:", err);
+        };
     }
 
     function escapeAdminHTML(str) {

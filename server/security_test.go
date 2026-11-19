@@ -96,7 +96,7 @@ func TestSecurity_OneTimePairingAndNoTwoSessions(t *testing.T) {
 	}
 }
 
-func TestSecurity_SingleRemoteWebSocketEnforced(t *testing.T) {
+func TestSecurity_ConcurrentRemoteWebSockets_NoFlapping(t *testing.T) {
 	srv := New(Config{
 		SessionToken: "pair-ws-token",
 		PollInterval: 20 * time.Millisecond,
@@ -115,13 +115,13 @@ func TestSecurity_SingleRemoteWebSocketEnforced(t *testing.T) {
 	}()
 	defer httpServer.Close()
 
-	dialRemote := func() *websocket.Conn {
+	dialRemote := func(ip string, port int) *websocket.Conn {
 		dialer := websocket.Dialer{
 			NetDialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				clientConn, serverConn := net.Pipe()
 				listener.conns <- &pipeAddrConn{
 					Conn:       serverConn,
-					remoteAddr: &net.TCPAddr{IP: net.ParseIP("192.168.1.50"), Port: 54321},
+					remoteAddr: &net.TCPAddr{IP: net.ParseIP(ip), Port: port},
 				}
 				return clientConn, nil
 			},
@@ -135,19 +135,70 @@ func TestSecurity_SingleRemoteWebSocketEnforced(t *testing.T) {
 		return conn
 	}
 
-	conn1 := dialRemote()
+	// 1. First client connects and receives status
+	conn1 := dialRemote("192.168.1.50", 54321)
 	defer conn1.Close()
-	time.Sleep(30 * time.Millisecond)
+
+	var p1 map[string]interface{}
+	if err := conn1.ReadJSON(&p1); err != nil {
+		t.Fatalf("conn1 failed to read initial JSON: %v", err)
+	}
+	if p1["output"] != "ok" {
+		t.Fatalf("expected output 'ok', got %v", p1["output"])
+	}
+
+	time.Sleep(25 * time.Millisecond)
 	if srv.hub.RemoteCount() != 1 {
 		t.Fatalf("expected 1 remote WS client, got %d", srv.hub.RemoteCount())
 	}
 
-	// Second remote WS connection with same active session evicts the first, keeping RemoteCount <= 1
-	conn2 := dialRemote()
+	// 2. Second remote WS connection (e.g. second tab, PWA, or reconnecting device) connects.
+	// Must NOT evict the first client; both must receive stream concurrently without flapping.
+	conn2 := dialRemote("192.168.1.50", 54322)
 	defer conn2.Close()
+
+	var p2 map[string]interface{}
+	if err := conn2.ReadJSON(&p2); err != nil {
+		t.Fatalf("conn2 failed to read initial JSON: %v", err)
+	}
+	if p2["output"] != "ok" {
+		t.Fatalf("expected output 'ok', got %v", p2["output"])
+	}
+
+	time.Sleep(25 * time.Millisecond)
+	if srv.hub.RemoteCount() != 2 {
+		t.Fatalf("expected 2 concurrent remote WS clients, got %d", srv.hub.RemoteCount())
+	}
+
+	// 3. Ping frame handled cleanly by server read pump
+	if err := conn1.WriteControl(websocket.PingMessage, []byte("test-ping"), time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("failed to write ping: %v", err)
+	}
+
+	// 4. Closing conn1 leaves conn2 running without disturbance
+	_ = conn1.Close()
 	time.Sleep(30 * time.Millisecond)
 	if srv.hub.RemoteCount() != 1 {
-		t.Fatalf("expected at most 1 remote WS client, got %d", srv.hub.RemoteCount())
+		t.Fatalf("expected 1 remote WS client after closing conn1, got %d", srv.hub.RemoteCount())
+	}
+
+	// conn2 should still receive ticks
+	if err := conn2.ReadJSON(&p2); err != nil {
+		t.Fatalf("conn2 should remain functional after conn1 closes, got: %v", err)
+	}
+
+	// 5. Regenerating token via localhost explicitly revokes and disconnects all remote sessions
+	reqRegen := httptest.NewRequest(http.MethodPost, "/api/token/regenerate", nil)
+	reqRegen.RemoteAddr = "127.0.0.1:50000"
+	recRegen := httptest.NewRecorder()
+	srv.HandleRegenerateToken(recRegen, reqRegen)
+	if recRegen.Code != http.StatusOK {
+		t.Fatalf("expected 200 on token regenerate, got %d", recRegen.Code)
+	}
+
+	time.Sleep(30 * time.Millisecond)
+	if srv.hub.RemoteCount() != 0 {
+		t.Fatalf("expected 0 remote WS clients after token regenerate, got %d", srv.hub.RemoteCount())
 	}
 }
 
