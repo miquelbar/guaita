@@ -604,7 +604,15 @@ func GetStatusWithPanes(preferredPane string) (AgentStatus, []AgentStatus, error
 	}
 
 	readPane := func(id string) string {
-		raw, _ := execCommand(bin, "pane", "read", id, "--source", "recent-unwrapped", "--lines", "80").Output()
+		// Use passive terminal sources ("detection" -> fallback "visible") to completely decouple
+		// Guaita background reads from Herdr's active terminal viewport.
+		// Avoid "--source recent-unwrapped --lines N" which triggers Herdr's active alt_screen_read,
+		// synthesizing scroll-up and bottom-probe events that cause phantom scrolling and
+		// "Back to bottom" UI flickers in Herdr while the user is working.
+		raw, err := execCommand(bin, "pane", "read", id, "--source", "detection").Output()
+		if err != nil || len(raw) == 0 {
+			raw, _ = execCommand(bin, "pane", "read", id, "--source", "visible").Output()
+		}
 		return string(raw)
 	}
 

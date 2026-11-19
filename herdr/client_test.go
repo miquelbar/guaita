@@ -98,6 +98,27 @@ func TestHelperProcess(t *testing.T) {
 			if len(args) > 3 {
 				targetPane = args[3]
 			}
+			if mode == "verify_read_source" {
+				source := ""
+				for i, a := range args {
+					if a == "--source" && i+1 < len(args) {
+						source = args[i+1]
+						break
+					}
+				}
+				if source != "detection" {
+					fmt.Fprintf(os.Stderr, "unexpected source: %s\n", source)
+					os.Exit(3)
+				}
+				for _, a := range args {
+					if a == "--lines" || a == "recent-unwrapped" {
+						fmt.Fprintf(os.Stderr, "prohibited argument causing scroll harvest: %s\n", a)
+						os.Exit(4)
+					}
+				}
+				fmt.Print("Clean passive terminal output")
+				return
+			}
 			switch mode {
 			case "unfocused_pane_prompt":
 				if targetPane == "w1:p2" {
@@ -227,6 +248,21 @@ func TestGetStatus_ApproveWordInOutputNoFalsePositive(t *testing.T) {
 	}
 	if status.Waiting {
 		t.Errorf("expected waiting to be false when output only mentions the word 'approve'")
+	}
+}
+
+func TestGetStatus_UsesPassiveDetectionSourceWithoutScrollHarvesting(t *testing.T) {
+	oldExec := execCommand
+	defer func() { execCommand = oldExec }()
+	execCommand = fakeExecCommand
+
+	t.Setenv("TEST_HERDR_MODE", "verify_read_source")
+	status, err := GetStatus()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status.Output != "Clean passive terminal output" {
+		t.Errorf("unexpected output: %s", status.Output)
 	}
 }
 
