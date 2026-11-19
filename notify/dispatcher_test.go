@@ -431,6 +431,10 @@ func TestParseTelegramAction(t *testing.T) {
 		{"reject", "", "reject", true},
 		{"approve:w1:p2", "w1:p2", "approve", true},
 		{"reject:%3", "%3", "reject", true},
+		{"act:1:%4", "%4", "1", true},
+		{"act:p:w1:p2", "w1:p2", "p", true},
+		{"act:esc", "", "esc", true},
+		{"act:approve:%1", "%1", "approve", true},
 		{"drop-database", "", "", false},
 	}
 	for _, tc := range cases {
@@ -438,6 +442,73 @@ func TestParseTelegramAction(t *testing.T) {
 		if p != tc.wantPane || a != tc.wantAct || ok != tc.wantOK {
 			t.Errorf("ParseTelegramAction(%q) = (%q, %q, %v), want (%q, %q, %v)", tc.raw, p, a, ok, tc.wantPane, tc.wantAct, tc.wantOK)
 		}
+	}
+}
+
+func TestTelegramNotifier_CustomOptionsKeyboard(t *testing.T) {
+	var requests []struct {
+		path    string
+		payload map[string]interface{}
+	}
+	client := &http.Client{Transport: mockTransport(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		requests = append(requests, struct {
+			path    string
+			payload map[string]interface{}
+		}{path: r.URL.Path, payload: payload})
+		body := `{"ok":true}`
+		if strings.HasSuffix(r.URL.Path, "/sendMessage") {
+			body = `{"ok":true,"result":{"message_id":99}}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	tg := &TelegramNotifier{Token: "token", ChatID: "123", Client: client, messages: make(map[string]telegramMessage), resolved: make(map[string]string)}
+
+	event := NotificationEvent{
+		PaneID: "%4",
+		Body:   "Select action:",
+		Options: []NotificationOption{
+			{Key: "1", Label: "Yes, proceed", Style: "approve"},
+			{Key: "2", Label: "Always allow", Style: "always"},
+			{Key: "esc", Label: "Cancel", Style: "reject"},
+		},
+	}
+	if err := tg.Notify(event); err != nil {
+		t.Fatalf("notify failed: %v", err)
+	}
+
+	if len(requests) != 1 || !strings.HasSuffix(requests[0].path, "/sendMessage") {
+		t.Fatalf("expected 1 sendMessage request, got %+v", requests)
+	}
+	markup := requests[0].payload["reply_markup"].(map[string]interface{})
+	keyboard := markup["inline_keyboard"].([]interface{})
+	// 3 option rows + 1 bottom row (enter/esc) = 4 rows
+	if len(keyboard) != 4 {
+		t.Fatalf("expected 4 keyboard rows, got %d: %+v", len(keyboard), keyboard)
+	}
+
+	firstRow := keyboard[0].([]interface{})
+	firstBtn := firstRow[0].(map[string]interface{})
+	if firstBtn["callback_data"] != "act:1:%4" {
+		t.Errorf("expected callback_data 'act:1:%%4', got %v", firstBtn["callback_data"])
+	}
+
+	secondRow := keyboard[1].([]interface{})
+	secondBtn := secondRow[0].(map[string]interface{})
+	if secondBtn["callback_data"] != "act:2:%4" {
+		t.Errorf("expected callback_data 'act:2:%%4', got %v", secondBtn["callback_data"])
+	}
+
+	if err := tg.Resolve("%4", "2"); err != nil {
+		t.Fatalf("resolve failed: %v", err)
+	}
+	if len(requests) != 2 || !strings.HasSuffix(requests[1].path, "/editMessageText") {
+		t.Fatalf("expected 2nd request to be editMessageText, got %+v", requests)
+	}
+	text := requests[1].payload["text"].(string)
+	if !strings.Contains(text, "OPTION SELECTED (2)") {
+		t.Errorf("expected resolution text to contain 'OPTION SELECTED (2)', got %q", text)
 	}
 }
 

@@ -55,9 +55,9 @@ func (t *TelegramNotifier) Name() string {
 	return "telegram"
 }
 
-// ParseTelegramAction parses "approve", "reject", or "approve:<paneID>" / "reject:<paneID>".
+// ParseTelegramAction parses "approve", "reject", "enter", "esc", "approve:<paneID>", "reject:<paneID>", or "act:<action>:<paneID>".
 func ParseTelegramAction(raw string) (paneID, action string, ok bool) {
-	if raw == "approve" || raw == "reject" {
+	if raw == "approve" || raw == "reject" || raw == "enter" || raw == "esc" {
 		return "", raw, true
 	}
 	if strings.HasPrefix(raw, "approve:") {
@@ -65,6 +65,14 @@ func ParseTelegramAction(raw string) (paneID, action string, ok bool) {
 	}
 	if strings.HasPrefix(raw, "reject:") {
 		return strings.TrimPrefix(raw, "reject:"), "reject", true
+	}
+	if strings.HasPrefix(raw, "act:") {
+		trimmed := strings.TrimPrefix(raw, "act:")
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) == 2 {
+			return parts[1], parts[0], true
+		}
+		return "", parts[0], true
 	}
 	return "", "", false
 }
@@ -117,18 +125,55 @@ func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 		html.EscapeString(body),
 	)
 
-	approveData := "approve"
-	rejectData := "reject"
-	if event.PaneID != "" && len("approve:"+event.PaneID) <= 64 {
-		approveData = "approve:" + event.PaneID
-		rejectData = "reject:" + event.PaneID
-	}
+	var keyboard [][]map[string]string
+	if len(event.Options) > 0 {
+		keyboard = make([][]map[string]string, 0, len(event.Options)+1)
+		for _, opt := range event.Options {
+			cbData := "act:" + opt.Key
+			if event.PaneID != "" && len("act:"+opt.Key+":"+event.PaneID) <= 64 {
+				cbData = fmt.Sprintf("act:%s:%s", opt.Key, event.PaneID)
+			}
+			icon := "• "
+			switch opt.Style {
+			case "approve":
+				icon = "✓ "
+			case "always":
+				icon = "⚡ "
+			case "reject":
+				icon = "✕ "
+			}
+			label := icon + opt.Label
+			if len([]rune(label)) > 36 {
+				label = string([]rune(label)[:33]) + "..."
+			}
+			keyboard = append(keyboard, []map[string]string{
+				{"text": label, "callback_data": cbData},
+			})
+		}
+		enterData := "act:enter"
+		escData := "act:esc"
+		if event.PaneID != "" && len("act:enter:"+event.PaneID) <= 64 {
+			enterData = "act:enter:" + event.PaneID
+			escData = "act:esc:" + event.PaneID
+		}
+		keyboard = append(keyboard, []map[string]string{
+			{"text": "↵ Send Enter", "callback_data": enterData},
+			{"text": "⎋ Cancel (Esc)", "callback_data": escData},
+		})
+	} else {
+		approveData := "approve"
+		rejectData := "reject"
+		if event.PaneID != "" && len("approve:"+event.PaneID) <= 64 {
+			approveData = "approve:" + event.PaneID
+			rejectData = "reject:" + event.PaneID
+		}
 
-	keyboard := [][]map[string]string{
-		{
-			{"text": "✓ APPROVE (Y)", "callback_data": approveData},
-			{"text": "✕ REJECT (N)", "callback_data": rejectData},
-		},
+		keyboard = [][]map[string]string{
+			{
+				{"text": "✓ APPROVE (Y)", "callback_data": approveData},
+				{"text": "✕ REJECT (N)", "callback_data": rejectData},
+			},
+		}
 	}
 
 	payload := map[string]interface{}{
@@ -210,6 +255,8 @@ func (t *TelegramNotifier) Resolve(paneID, action string) error {
 		label = "✅ APPROVED"
 	case "reject", "no", "n":
 		label = "❌ REJECTED"
+	default:
+		label = fmt.Sprintf("✅ OPTION SELECTED (%s)", html.EscapeString(action))
 	}
 	payload := map[string]interface{}{
 		"chat_id":    t.ChatID,

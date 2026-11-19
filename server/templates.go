@@ -444,6 +444,61 @@ const mobileTemplate = `<!DOCTYPE html>
             padding: 10px;
             font-size: 0.82rem;
         }
+        .action-pills-column {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .pill-option {
+            background: var(--surface-hover);
+            border: 1px solid var(--surface-border);
+            color: var(--text);
+            text-align: left;
+            justify-content: flex-start;
+            padding: 10px 14px;
+            line-height: 1.35;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        .pill-option.pill-approve {
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid var(--success);
+            color: #86efac;
+        }
+        .pill-option.pill-always {
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid var(--accent);
+            color: #7dd3fc;
+        }
+        .pill-option.pill-reject {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid var(--danger);
+            color: #fca5a5;
+        }
+        .opt-key-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 22px;
+            height: 22px;
+            padding: 0 6px;
+            background: rgba(0, 0, 0, 0.45);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 6px;
+            font-family: var(--font-mono, monospace);
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: #fff;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+        .opt-label {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: normal;
+            word-break: break-word;
+        }
 
         /* Floating ChatGPT-style input bar */
         .bottom-bar {
@@ -582,6 +637,7 @@ const mobileTemplate = `<!DOCTYPE html>
                     <div id="approvalTitleMobile" class="approval-title">⚠️ Approval Requested</div>
                     <div id="approvalDescMobile" style="font-size: 0.8rem; color: #cbd5e1;">Agent is paused awaiting human confirmation:</div>
                     <div id="promptQuoteMobile" class="prompt-quote-box" style="display: none;"></div>
+                    <div id="optionsPillsMobile" class="action-pills-column" style="display: none;"></div>
                     <div id="confirmPillsMobile" class="action-pills">
                         <button type="button" class="pill-btn pill-approve" data-action="approve">✓ APPROVE (Y)</button>
                         <button type="button" class="pill-btn pill-reject" data-action="reject">✕ REJECT (N)</button>
@@ -636,8 +692,10 @@ const mobileTemplate = `<!DOCTYPE html>
     const approvalTitleMobile = document.getElementById('approvalTitleMobile');
     const approvalDescMobile = document.getElementById('approvalDescMobile');
     const promptQuoteMobile = document.getElementById('promptQuoteMobile');
+    const optionsPillsMobile = document.getElementById('optionsPillsMobile');
     const confirmPillsMobile = document.getElementById('confirmPillsMobile');
     const questionPillsMobile = document.getElementById('questionPillsMobile');
+    const btnFocusReplyMobile = document.getElementById('btnFocusReplyMobile');
     const agentStateBanner = document.getElementById('agentStateBanner');
     const agentStateLabel = document.getElementById('agentStateLabel');
     const agentMsgCard = document.getElementById('agentMsgCard');
@@ -930,13 +988,49 @@ const mobileTemplate = `<!DOCTYPE html>
             if (agentTextEl) agentTextEl.textContent = 'Agent finished its turn and is ready for instructions:';
         }
 
+        const hasOptions = isWaiting && Array.isArray(data.prompt_options) && data.prompt_options.length > 0;
+
         if (isWaiting) {
             approvalCard.style.display = 'block';
-            if (isQuestion) {
+            if (hasOptions) {
+                approvalCard.classList.remove('question-mode');
+                approvalTitleMobile.textContent = '⚡ Choice Required — Select Option';
+                approvalDescMobile.textContent = 'Agent is paused awaiting your choice:';
+                confirmPillsMobile.style.display = 'none';
+                if (btnFocusReplyMobile) btnFocusReplyMobile.style.display = 'none';
+                questionPillsMobile.style.display = 'grid';
+                optionsPillsMobile.style.display = 'flex';
+                optionsPillsMobile.innerHTML = '';
+                data.prompt_options.forEach(opt => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    let styleClass = 'pill-secondary';
+                    let icon = '•';
+                    if (opt.style === 'approve') {
+                        styleClass = 'pill-approve';
+                        icon = '✓';
+                    } else if (opt.style === 'always') {
+                        styleClass = 'pill-always';
+                        icon = '⚡';
+                    } else if (opt.style === 'reject') {
+                        styleClass = 'pill-reject';
+                        icon = '✕';
+                    }
+                    btn.className = 'pill-btn pill-option ' + styleClass;
+                    btn.dataset.action = opt.key;
+                    btn.innerHTML = '<span class="opt-key-badge">' + escapeHTML(opt.key) + '</span><span class="opt-label">' + icon + ' ' + escapeHTML(opt.label) + '</span>';
+                    optionsPillsMobile.appendChild(btn);
+                });
+                if (mobileForm) mobileForm.classList.remove('awaiting-reply');
+                if (userInputEl) userInputEl.placeholder = 'Type custom option or command...';
+            } else if (isQuestion) {
                 approvalCard.classList.add('question-mode');
                 approvalTitleMobile.textContent = '❓ Question — Written Reply Required';
                 approvalDescMobile.textContent = 'This prompt requires a written answer (not Yes/No):';
+                optionsPillsMobile.style.display = 'none';
+                optionsPillsMobile.innerHTML = '';
                 confirmPillsMobile.style.display = 'none';
+                if (btnFocusReplyMobile) btnFocusReplyMobile.style.display = '';
                 questionPillsMobile.style.display = 'grid';
                 if (mobileForm) mobileForm.classList.add('awaiting-reply');
                 if (userInputEl) userInputEl.placeholder = '✍️ Type your answer to the agent question...';
@@ -944,7 +1038,10 @@ const mobileTemplate = `<!DOCTYPE html>
                 approvalCard.classList.remove('question-mode');
                 approvalTitleMobile.textContent = '⚠️ Approval Required (Yes / No)';
                 approvalDescMobile.textContent = 'Agent is paused awaiting human confirmation:';
+                optionsPillsMobile.style.display = 'none';
+                optionsPillsMobile.innerHTML = '';
                 confirmPillsMobile.style.display = 'grid';
+                if (btnFocusReplyMobile) btnFocusReplyMobile.style.display = '';
                 questionPillsMobile.style.display = 'none';
                 if (mobileForm) mobileForm.classList.remove('awaiting-reply');
                 if (userInputEl) userInputEl.placeholder = 'Reply to agent or type command...';
@@ -959,6 +1056,9 @@ const mobileTemplate = `<!DOCTYPE html>
             }
         } else {
             approvalCard.style.display = 'none';
+            optionsPillsMobile.style.display = 'none';
+            optionsPillsMobile.innerHTML = '';
+            if (btnFocusReplyMobile) btnFocusReplyMobile.style.display = '';
             if (mobileForm) mobileForm.classList.remove('awaiting-reply');
             if (userInputEl) userInputEl.placeholder = 'Reply to agent or type command...';
         }
@@ -997,11 +1097,13 @@ const mobileTemplate = `<!DOCTYPE html>
             try {
                 const data = JSON.parse(event.data);
                 const outputChanged = data.output !== undefined && data.output !== lastOutput;
+                const optionsSig = (data.prompt_options || []).map(o => o.key + ':' + o.label).join(',');
                 const renderSig = [
                     data.output || '',
                     data.waiting ? '1' : '0',
                     data.prompt_type || '',
-                    data.prompt_text || ''
+                    data.prompt_text || '',
+                    optionsSig
                 ].join('||');
 
                 if (data.output !== undefined && renderSig !== lastRenderSig) {
@@ -1567,6 +1669,49 @@ const adminTemplate = `<!DOCTYPE html>
         .btn-act-rej { background: var(--danger); color: #fff; }
         .btn-act-reply { background: var(--warning); color: #0b0f19; font-weight: 700; }
         .btn-act-sec { background: var(--surface-hover); color: var(--text); border: 1px solid var(--surface-border); }
+        .action-grid-column {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .btn-act-option {
+            background: var(--surface-hover);
+            color: var(--text);
+            border: 1px solid var(--surface-border);
+            text-align: left;
+            justify-content: flex-start;
+            padding: 10px 14px;
+            line-height: 1.35;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            width: 100%%;
+            box-sizing: border-box;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn-act-option:hover {
+            border-color: var(--accent);
+            background: var(--surface-active);
+        }
+        .btn-act-option.btn-act-app {
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid var(--success);
+            color: #86efac;
+        }
+        .btn-act-option.btn-act-always {
+            background: rgba(56, 189, 248, 0.15);
+            border: 1px solid var(--accent);
+            color: #7dd3fc;
+        }
+        .btn-act-option.btn-act-rej {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid var(--danger);
+            color: #fca5a5;
+        }
         .chat-footer {
             padding: 14px 18px 16px 18px;
             border-top: 1px solid var(--surface-border);
@@ -1830,6 +1975,7 @@ const adminTemplate = `<!DOCTYPE html>
                             <div id="approvalTitleAdmin" style="font-size: 0.82rem; font-weight: 700; color: var(--danger); text-transform: uppercase;">⚠️ Human Approval Required</div>
                             <div id="approvalDescAdmin" style="font-size: 0.8rem; color: #cbd5e1; margin-top: 4px;">Agent is waiting for your confirmation:</div>
                             <div id="promptQuoteAdmin" class="prompt-quote-admin" style="display: none;"></div>
+                            <div id="optionsActionsAdmin" class="action-grid-column" style="display: none;"></div>
                             <div id="confirmActionsAdmin" class="action-grid">
                                 <button class="btn-act btn-act-app" data-action="approve">✓ APPROVE (Y)</button>
                                 <button class="btn-act btn-act-rej" data-action="reject">✕ REJECT (N)</button>
@@ -1986,8 +2132,10 @@ const adminTemplate = `<!DOCTYPE html>
     const approvalTitleAdmin = document.getElementById('approvalTitleAdmin');
     const approvalDescAdmin = document.getElementById('approvalDescAdmin');
     const promptQuoteAdmin = document.getElementById('promptQuoteAdmin');
+    const optionsActionsAdmin = document.getElementById('optionsActionsAdmin');
     const confirmActionsAdmin = document.getElementById('confirmActionsAdmin');
     const questionActionsAdmin = document.getElementById('questionActionsAdmin');
+    const btnFocusReplyAdmin = document.getElementById('btnFocusReplyAdmin');
     const adminStateBanner = document.getElementById('adminStateBanner');
     const adminStateLabel = document.getElementById('adminStateLabel');
     const adminAgentBubble = document.getElementById('adminAgentBubble');
@@ -2217,6 +2365,7 @@ const adminTemplate = `<!DOCTYPE html>
     function updateAdminStateUI(data) {
         const isWaiting = Boolean(data.waiting);
         const isQuestion = isWaiting && data.prompt_type === 'question';
+        const hasOptions = isWaiting && Array.isArray(data.prompt_options) && data.prompt_options.length > 0;
         const isWorking = !isWaiting && data.agent_state === 'working';
         const isOffline = data.herdr_online === false;
         const paneLabel = data.pane_id ? (' [' + data.pane_id + ']') : '';
@@ -2237,6 +2386,13 @@ const adminTemplate = `<!DOCTYPE html>
             paneBadge.style.color = 'var(--warning)';
             paneBadge.innerText = '❓ QUESTION / INPUT REQUIRED • Pane ' + (data.pane_id || 'active');
             if (agentTextAdminEl) agentTextAdminEl.textContent = 'Agent is paused waiting for a written reply:';
+        } else if (hasOptions) {
+            adminStateBanner.classList.add('state-confirm');
+            adminAgentBubble.classList.add('card-confirm');
+            adminStateLabel.textContent = '⚡ CHOICE REQUIRED' + paneLabel + ' — Select an option';
+            paneBadge.style.color = 'var(--accent)';
+            paneBadge.innerText = '⚡ CHOICE REQUIRED • Pane ' + (data.pane_id || 'active');
+            if (agentTextAdminEl) agentTextAdminEl.textContent = 'Agent is paused waiting for your choice:';
         } else if (isWaiting) {
             adminStateBanner.classList.add('state-confirm');
             adminAgentBubble.classList.add('card-confirm');
@@ -2262,12 +2418,47 @@ const adminTemplate = `<!DOCTYPE html>
 
         if (isWaiting) {
             approvalBanner.style.display = 'block';
-            if (isQuestion) {
+            if (hasOptions) {
+                approvalBanner.classList.remove('question-mode');
+                approvalTitleAdmin.style.color = 'var(--accent)';
+                approvalTitleAdmin.textContent = '⚡ Option Choice Required';
+                approvalDescAdmin.textContent = 'Select an option to send to the agent:';
+                confirmActionsAdmin.style.display = 'none';
+                if (btnFocusReplyAdmin) btnFocusReplyAdmin.style.display = 'none';
+                questionActionsAdmin.style.display = 'flex';
+                optionsActionsAdmin.style.display = 'flex';
+                optionsActionsAdmin.innerHTML = '';
+                data.prompt_options.forEach(opt => {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    let styleClass = '';
+                    let icon = '•';
+                    if (opt.style === 'approve') {
+                        styleClass = 'btn-act-app';
+                        icon = '✓';
+                    } else if (opt.style === 'always') {
+                        styleClass = 'btn-act-always';
+                        icon = '⚡';
+                    } else if (opt.style === 'reject') {
+                        styleClass = 'btn-act-rej';
+                        icon = '✕';
+                    }
+                    btn.className = 'btn-act btn-act-option ' + styleClass;
+                    btn.dataset.action = opt.key;
+                    btn.innerHTML = '<span class="opt-key-badge">' + escapeHTML(opt.key) + '</span><span class="opt-label">' + icon + ' ' + escapeHTML(opt.label) + '</span>';
+                    optionsActionsAdmin.appendChild(btn);
+                });
+                if (adminInputPill) adminInputPill.classList.remove('awaiting-reply');
+                if (adminInputEl) adminInputEl.placeholder = 'Type custom option or send instruction...';
+            } else if (isQuestion) {
                 approvalBanner.classList.add('question-mode');
                 approvalTitleAdmin.style.color = '#fbbf24';
                 approvalTitleAdmin.textContent = '❓ Question — Written Reply Required';
                 approvalDescAdmin.textContent = 'This prompt is asking a question (not Yes/No). Write your answer below:';
+                optionsActionsAdmin.style.display = 'none';
+                optionsActionsAdmin.innerHTML = '';
                 confirmActionsAdmin.style.display = 'none';
+                if (btnFocusReplyAdmin) btnFocusReplyAdmin.style.display = '';
                 questionActionsAdmin.style.display = 'flex';
                 if (adminInputPill) adminInputPill.classList.add('awaiting-reply');
                 if (adminInputEl) adminInputEl.placeholder = '✍️ Type your answer to the agent question...';
@@ -2276,7 +2467,10 @@ const adminTemplate = `<!DOCTYPE html>
                 approvalTitleAdmin.style.color = 'var(--danger)';
                 approvalTitleAdmin.textContent = '⚠️ Human Approval Required (Yes / No)';
                 approvalDescAdmin.textContent = 'Agent is waiting for your confirmation:';
+                optionsActionsAdmin.style.display = 'none';
+                optionsActionsAdmin.innerHTML = '';
                 confirmActionsAdmin.style.display = 'flex';
+                if (btnFocusReplyAdmin) btnFocusReplyAdmin.style.display = '';
                 questionActionsAdmin.style.display = 'none';
                 if (adminInputPill) adminInputPill.classList.remove('awaiting-reply');
                 if (adminInputEl) adminInputEl.placeholder = 'Reply to agent or send instruction...';
@@ -2291,6 +2485,9 @@ const adminTemplate = `<!DOCTYPE html>
             }
         } else {
             approvalBanner.style.display = 'none';
+            optionsActionsAdmin.style.display = 'none';
+            optionsActionsAdmin.innerHTML = '';
+            if (btnFocusReplyAdmin) btnFocusReplyAdmin.style.display = '';
             if (adminInputPill) adminInputPill.classList.remove('awaiting-reply');
             if (adminInputEl) adminInputEl.placeholder = 'Reply to agent or send instruction...';
         }
@@ -2329,11 +2526,13 @@ const adminTemplate = `<!DOCTYPE html>
             try {
                 const data = JSON.parse(event.data);
                 const outputChanged = data.output !== undefined && data.output !== adminLastOutput;
+                const optionsSig = (data.prompt_options || []).map(o => o.key + ':' + o.label).join(',');
                 const renderSig = [
                     data.output || '',
                     data.waiting ? '1' : '0',
                     data.prompt_type || '',
-                    data.prompt_text || ''
+                    data.prompt_text || '',
+                    optionsSig
                 ].join('||');
 
                 if (data.output !== undefined && renderSig !== adminLastRenderSig) {

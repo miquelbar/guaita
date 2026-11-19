@@ -591,3 +591,115 @@ func TestHandleWebSocket_StreamsPromptTypeAndQuestionHighlight(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleWebSocket_StreamsPromptOptionsAndDispatchesOptionActions(t *testing.T) {
+	var capturedAction string
+	var capturedPane string
+
+	srv := New(Config{
+		SessionToken: "secret123",
+		SessionDays:  7,
+		PollInterval: 10 * time.Millisecond,
+	})
+	srv.statusProvider = func() (herdr.AgentStatus, error) {
+		return herdr.AgentStatus{
+			Output:     "Would you like to run the following command?\n› 1. Yes, proceed\n  2. Always allow",
+			Waiting:    true,
+			PromptType: "confirm",
+			PromptText: "Would you like to run the following command?",
+			PromptOptions: []herdr.PromptOption{
+				{Key: "1", Label: "Yes, proceed (y)", Style: "approve"},
+				{Key: "2", Label: "Yes, and don't ask again (p)", Style: "always"},
+				{Key: "esc", Label: "No, and tell Codex what to do differently (esc)", Style: "reject"},
+			},
+			AgentState:  "idle",
+			PaneID:      "w1:p2",
+			HerdrOnline: true,
+		}, nil
+	}
+	srv.actionPaneSender = func(paneID, action string) error {
+		capturedPane = paneID
+		capturedAction = action
+		return nil
+	}
+
+	listener := newMemoryListener()
+	defer listener.Close()
+
+	httpServer := &http.Server{Handler: srv.Routes()}
+	go func() {
+		_ = httpServer.Serve(listener)
+	}()
+	defer httpServer.Close()
+
+	dialer := &websocket.Dialer{
+		NetDial: func(network, addr string) (net.Conn, error) {
+			serverConn, clientConn := net.Pipe()
+			wrappedServerConn := &pipeAddrConn{
+				Conn:       serverConn,
+				remoteAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 54321},
+			}
+			listener.conns <- wrappedServerConn
+			return clientConn, nil
+		},
+	}
+
+	conn, _, err := dialer.Dial("ws://localhost/ws", nil)
+	if err != nil {
+		t.Fatalf("unexpected WS dial error: %v", err)
+	}
+	defer conn.Close()
+
+	var payload wsPayload
+	if err := conn.ReadJSON(&payload); err != nil {
+		t.Fatalf("failed to read JSON from websocket: %v", err)
+	}
+	if !payload.Waiting || len(payload.PromptOptions) != 3 {
+		t.Fatalf("expected 3 prompt options, got %d (waiting=%v)", len(payload.PromptOptions), payload.Waiting)
+	}
+	if payload.PromptOptions[0].Key != "1" || payload.PromptOptions[0].Style != "approve" {
+		t.Errorf("unexpected option 0: %+v", payload.PromptOptions[0])
+	}
+	if payload.PromptOptions[1].Key != "2" || payload.PromptOptions[1].Style != "always" {
+		t.Errorf("unexpected option 1: %+v", payload.PromptOptions[1])
+	}
+	if payload.PromptOptions[2].Key != "esc" || payload.PromptOptions[2].Style != "reject" {
+		t.Errorf("unexpected option 2: %+v", payload.PromptOptions[2])
+	}
+
+	// Verify template HTML elements and CSS classes for prompt options
+	mobileHTML := RenderMobileHTMLWithNonce(7, "testnonce")
+	if strings.Contains(mobileHTML, "%!") {
+		t.Errorf("mobileHTML contains broken fmt.Sprintf verb")
+	}
+	for _, needle := range []string{"optionsPillsMobile", "pill-option", "pill-always"} {
+		if !strings.Contains(mobileHTML, needle) {
+			t.Errorf("expected mobileHTML to contain %q", needle)
+		}
+	}
+
+	adminHTML := RenderAdminHTML(AdminPageData{SessionDays: 7, CSPNonce: "testnonce"})
+	if strings.Contains(adminHTML, "%!") {
+		t.Errorf("adminHTML contains broken fmt.Sprintf verb")
+	}
+	for _, needle := range []string{"optionsActionsAdmin", "btn-act-option", "btn-act-always"} {
+		if !strings.Contains(adminHTML, needle) {
+			t.Errorf("expected adminHTML to contain %q", needle)
+		}
+	}
+
+	// Dispatch option "2" with pane_id
+	form := url.Values{"action": {"2"}, "pane_id": {"w1:p2"}}
+	req := httptest.NewRequest(http.MethodPost, "/action", strings.NewReader(form.Encode()))
+	req.RemoteAddr = "127.0.0.1:44444"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+
+	srv.HandleAction(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK on option action dispatch, got %d", rec.Code)
+	}
+	if capturedAction != "2" || capturedPane != "w1:p2" {
+		t.Errorf("expected dispatched action ('2', 'w1:p2'), got (%q, %q)", capturedAction, capturedPane)
+	}
+}

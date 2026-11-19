@@ -318,6 +318,7 @@ func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
 		wantWaiting      bool
 		wantType         string
 		wantTextContains string
+		wantOptionCount  int
 	}{
 		{
 			name:             "open question in idle agent with TUI chrome at bottom",
@@ -345,6 +346,7 @@ func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
 			wantWaiting:      true,
 			wantType:         "question",
 			wantTextContains: "Which database engine should we configure?",
+			wantOptionCount:  3,
 		},
 		{
 			name:             "yes/no TUI confirmation menu",
@@ -354,6 +356,27 @@ func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
 			wantWaiting:      true,
 			wantType:         "confirm",
 			wantTextContains: "Allow editing /tmp/a?",
+			wantOptionCount:  3,
+		},
+		{
+			name:             "codex cli multi-option permission prompt",
+			output:           "Would you like to run the following command?\n\nEnvironment: local\n\nReason: ¿Permites repetir la suite Playwright después de ajustar la comprobación para leer el color del tema seleccionado?\n\n$ npm --prefix e2e run test:e2e\n\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for commands that start with `npm --prefix e2e run test:e2e` (p)\n  3. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel",
+			agentState:       "blocked",
+			initiallyWaiting: true,
+			wantWaiting:      true,
+			wantType:         "confirm",
+			wantTextContains: "$ npm --prefix e2e run test:e2e",
+			wantOptionCount:  3,
+		},
+		{
+			name:             "inline slash choice prompt",
+			output:           "Apply database migration? [y/N/a]:",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      true,
+			wantType:         "confirm",
+			wantTextContains: "Apply database migration?",
+			wantOptionCount:  3,
 		},
 		{
 			name:             "normal idle completion statement",
@@ -377,7 +400,7 @@ func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotWait, gotType, gotText := analyzePrompt(tc.output, tc.agentState, tc.initiallyWaiting)
+			gotWait, gotType, gotText, gotOpts := analyzePrompt(tc.output, tc.agentState, tc.initiallyWaiting)
 			if gotWait != tc.wantWaiting {
 				t.Errorf("waiting = %v, want %v (type=%q, text=%q)", gotWait, tc.wantWaiting, gotType, gotText)
 			}
@@ -386,6 +409,9 @@ func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
 			}
 			if tc.wantTextContains != "" && !strings.Contains(gotText, tc.wantTextContains) {
 				t.Errorf("promptText = %q, expected to contain %q", gotText, tc.wantTextContains)
+			}
+			if tc.wantOptionCount > 0 && len(gotOpts) != tc.wantOptionCount {
+				t.Errorf("got %d options, want %d: %+v", len(gotOpts), tc.wantOptionCount, gotOpts)
 			}
 		})
 	}

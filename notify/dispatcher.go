@@ -22,6 +22,13 @@ const (
 	ClaimConsumed
 )
 
+// NotificationOption represents an interactive choice on actionable notifications.
+type NotificationOption struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	Style string `json:"style,omitempty"`
+}
+
 // NotificationEvent holds details for an agent approval request.
 type NotificationEvent struct {
 	Title            string
@@ -31,6 +38,7 @@ type NotificationEvent struct {
 	PairingURL       string
 	ActionApproveURL string
 	ActionRejectURL  string
+	Options          []NotificationOption
 }
 
 // Notifier defines the common interface for notification channels.

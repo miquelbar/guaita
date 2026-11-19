@@ -756,21 +756,22 @@ func (s *Server) HandleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type wsPayload struct {
-	Output       string              `json:"output"`
-	Waiting      bool                `json:"waiting"`
-	PromptType   string              `json:"prompt_type,omitempty"`
-	PromptText   string              `json:"prompt_text,omitempty"`
-	PaneID       string              `json:"pane_id,omitempty"`
-	SelectedPane string              `json:"selected_pane,omitempty"`
-	Panes        []herdr.PaneSummary `json:"panes,omitempty"`
-	AgentState   string              `json:"agent_state,omitempty"`
-	Title        string              `json:"title,omitempty"`
-	HerdrOnline  bool                `json:"herdr_online"`
-	Clients      []ClientInfo        `json:"clients,omitempty"`
-	AuditLog     []AuditEntry        `json:"audit_log,omitempty"`
-	BannedIPs    []string            `json:"banned_ips,omitempty"`
-	PairingURL   string              `json:"pairing_url,omitempty"`
-	QRBase64     string              `json:"qr_base64,omitempty"`
+	Output        string               `json:"output"`
+	Waiting       bool                 `json:"waiting"`
+	PromptType    string               `json:"prompt_type,omitempty"`
+	PromptText    string               `json:"prompt_text,omitempty"`
+	PromptOptions []herdr.PromptOption `json:"prompt_options,omitempty"`
+	PaneID        string               `json:"pane_id,omitempty"`
+	SelectedPane  string               `json:"selected_pane,omitempty"`
+	Panes         []herdr.PaneSummary  `json:"panes,omitempty"`
+	AgentState    string               `json:"agent_state,omitempty"`
+	Title         string               `json:"title,omitempty"`
+	HerdrOnline   bool                 `json:"herdr_online"`
+	Clients       []ClientInfo         `json:"clients,omitempty"`
+	AuditLog      []AuditEntry         `json:"audit_log,omitempty"`
+	BannedIPs     []string             `json:"banned_ips,omitempty"`
+	PairingURL    string               `json:"pairing_url,omitempty"`
+	QRBase64      string               `json:"qr_base64,omitempty"`
 }
 
 func (s *Server) pollStatus() (herdr.AgentStatus, []herdr.AgentStatus, string, error) {
@@ -858,6 +859,7 @@ func (s *Server) maskConsumedWaiting(status *herdr.AgentStatus) {
 		status.Waiting = false
 		status.PromptType = ""
 		status.PromptText = ""
+		status.PromptOptions = nil
 	}
 	if len(status.Panes) == 0 {
 		return
@@ -868,6 +870,7 @@ func (s *Server) maskConsumedWaiting(status *herdr.AgentStatus) {
 			status.Panes[i].Waiting = false
 			status.Panes[i].PromptType = ""
 			status.Panes[i].PromptText = ""
+			status.Panes[i].PromptOptions = nil
 		}
 	}
 }
@@ -903,7 +906,9 @@ func (s *Server) dispatchWaitingStatuses(waiting []herdr.AgentStatus) {
 	baseURL := s.BaseURL()
 	for _, st := range waiting {
 		label := "Approval Required"
-		if st.PromptType == "question" {
+		if len(st.PromptOptions) > 0 {
+			label = fmt.Sprintf("Options Menu (%d Choices)", len(st.PromptOptions))
+		} else if st.PromptType == "question" {
 			label = "Question (Reply Needed)"
 		}
 		title := "🛡️ Guaita: " + label
@@ -914,12 +919,23 @@ func (s *Server) dispatchWaitingStatuses(waiting []herdr.AgentStatus) {
 		if st.PromptType != "" || st.PromptText != "" {
 			promptKey = st.PromptType + ":" + st.PromptText
 		}
+
+		notifOpts := make([]notify.NotificationOption, 0, len(st.PromptOptions))
+		for _, o := range st.PromptOptions {
+			notifOpts = append(notifOpts, notify.NotificationOption{
+				Key:   o.Key,
+				Label: o.Label,
+				Style: o.Style,
+			})
+		}
+
 		events = append(events, notify.NotificationEvent{
 			Title:      title,
 			Body:       st.Output,
 			PaneID:     st.PaneID,
 			PromptKey:  promptKey,
 			PairingURL: baseURL,
+			Options:    notifOpts,
 		})
 	}
 	s.cfg.Dispatcher.SyncWaitingPanes(events)
@@ -972,16 +988,17 @@ func (s *Server) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 		s.maskConsumedWaiting(&status)
 
 		payload := wsPayload{
-			Output:       status.Output,
-			Waiting:      status.Waiting,
-			PromptType:   status.PromptType,
-			PromptText:   status.PromptText,
-			PaneID:       status.PaneID,
-			SelectedPane: preferred,
-			Panes:        status.Panes,
-			AgentState:   status.AgentState,
-			Title:        status.Title,
-			HerdrOnline:  status.HerdrOnline,
+			Output:        status.Output,
+			Waiting:       status.Waiting,
+			PromptType:    status.PromptType,
+			PromptText:    status.PromptText,
+			PromptOptions: status.PromptOptions,
+			PaneID:        status.PaneID,
+			SelectedPane:  preferred,
+			Panes:         status.Panes,
+			AgentState:    status.AgentState,
+			Title:         status.Title,
+			HerdrOnline:   status.HerdrOnline,
 		}
 		if isLocal {
 			payload.Clients = s.hub.ListClients()
