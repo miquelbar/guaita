@@ -459,6 +459,15 @@ func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
 			wantType:         "",
 			wantTextContains: "",
 		},
+		{
+			name:             "active command execution with spinner and esc to cancel in footer is not waiting",
+			output:           "● Ran 3 commands, killed 1 task (npm --prefix web run build · go test ./... · task-1683)\n○ Running (KINEO_PORT=18080 ./bin/kineo)\n⣻  Running command...\n────────────────────────────────────────\n>\n────────────────────────────────────────\nesc to cancel                                                                                                                            auto · Gemini 3.8 Flash · high",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      false,
+			wantType:         "",
+			wantTextContains: "",
+		},
 	}
 
 	for _, tc := range cases {

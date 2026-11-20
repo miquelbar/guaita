@@ -124,7 +124,7 @@ type paneListOutput struct {
 }
 
 var (
-	promptRegex              = regexp.MustCompile(`(?i)(\([yY]/[nN]\)|\[[yY]/[nN]\]|\([yY]es/[nN]o\)|\[[yY]es/[nN]o\]|\[[yY]\]es|proceed\?|are you sure\??|press enter|enter to confirm|esc to cancel|allow once|allow always|always allow|allow this|yes,\s*allow|do you want to (run|execute|allow|create|edit|delete|proceed)|approval required)`)
+	promptRegex              = regexp.MustCompile(`(?i)(\([yY]/[nN]\)|\[[yY]/[nN]\]|\([yY]es/[nN]o\)|\[[yY]es/[nN]o\]|\[[yY]\]es|proceed\?|are you sure\??|press enter|enter to confirm|allow once|allow always|always allow|allow this|yes,\s*allow|do you want to (run|execute|allow|create|edit|delete|proceed)|approval required)`)
 	yesNoChoiceRegex         = regexp.MustCompile(`(?i)(\([yY]/[nN]\)|\[[yY]/[nN]\]|\([yY]es/[nN]o\)|\[[yY]es/[nN]o\]|\[[yY]\]es|proceed\?|are you sure\??|allow once|allow always|always allow|allow this|yes,\s*allow|do you want to (run|execute|allow|create|edit|delete|proceed)|approval required|\b[123]\.\s*(yes|no|allow|always allow|approve|reject|confirm|cancel)\b)`)
 	numberedMenuOptionRegex  = regexp.MustCompile(`^[>❯›»*]?\s*\d+\.\s+\S+`)
 	numberedOptionLineRegex  = regexp.MustCompile(`^[>❯›»*•\-]?\s*(?:\[(\d+)\]|(\d+)[\.\)\:\-])\s+(.+)$`)
@@ -137,7 +137,8 @@ var (
 	menuCursorPrefixRegex    = regexp.MustCompile(`^[>❯›»*]\s*`)
 	tuiBorderRegex           = regexp.MustCompile(`^[\s─━═╌╍┄┅┈┉╭╮╯╰┌┐┘└├┤┬┴┼│┃║\-_=*]+$`)
 	tuiInputPlaceholderRegex = regexp.MustCompile(`(?i)^[│┃║]?\s*[>❯›»]\s*(type a message.*|reply.*|send a message.*|ask anything.*|enter a prompt.*)?\s*[│┃║]?$`)
-	tuiFooterHintRegex       = regexp.MustCompile(`(?i)^\s*(\?\s+for\s+shortcuts|shift\+tab\b|ctrl\+[cd]\s+to\b|esc\s+to\s+interrupt\b|context:\s*\d+%|tokens:\s*\d+)`)
+	tuiFooterHintRegex       = regexp.MustCompile(`(?i)^\s*(\?\s+for\s+shortcuts|shift\+tab\b|ctrl\+[cd]\s+to\b|esc\s+to\s+(interrupt|cancel)\b|context:\s*\d+%|tokens:\s*\d+)`)
+	activeWorkingSpinnerRegex = regexp.MustCompile(`(?m)^[│┃║]?\s*[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⡿⣟⣯⣷⣾⣽⣻⢿]\s+(Working|Running|Managing|Thinking|Executing|Building|Testing|Compiling)\b`)
 )
 
 func isTUIChromeLine(line string) bool {
@@ -461,7 +462,13 @@ func analyzePrompt(outputText, agentState string, initiallyWaiting bool) (bool, 
 		return false, "", "", nil
 	}
 
-	tail6 := tailSliceJoin(nonEmpty, 6)
+	// If the agent is actively executing commands or tasks in the terminal (live spinner),
+	// it cannot be paused waiting for user approval.
+	if !initiallyWaiting && activeWorkingSpinnerRegex.MatchString(outputText) {
+		return false, "", "", nil
+	}
+
+	contentTail := tailSliceJoin(contentLines, 6)
 	contentTail5 := tailSliceJoin(contentLines, 5)
 
 	// First, check if structured menu options exist (numbered, lettered, or inline slash choices)
@@ -488,7 +495,7 @@ func analyzePrompt(outputText, agentState string, initiallyWaiting bool) (bool, 
 	}
 
 	// 1. Check for confirmation / TUI menu prompt
-	if promptRegex.MatchString(tail6) {
+	if promptRegex.MatchString(contentTail) {
 		// Distinguish a Yes/No confirmation from a multiple-choice question menu
 		hasNumberedOpts := false
 		for _, l := range contentLines[max(0, len(contentLines)-5):] {
@@ -497,10 +504,17 @@ func analyzePrompt(outputText, agentState string, initiallyWaiting bool) (bool, 
 				break
 			}
 		}
-		if hasNumberedOpts && !yesNoChoiceRegex.MatchString(tail6) {
-			return true, "question", contentTail5, nil
+		promptLine := contentTail5
+		for i := len(contentLines) - 1; i >= 0 && i >= len(contentLines)-5; i-- {
+			if promptRegex.MatchString(contentLines[i]) {
+				promptLine = contentLines[i]
+				break
+			}
 		}
-		return true, "confirm", contentTail5, nil
+		if hasNumberedOpts && !yesNoChoiceRegex.MatchString(contentTail) {
+			return true, "question", promptLine, nil
+		}
+		return true, "confirm", promptLine, nil
 	}
 
 	// 2. Check for explicit text-input prompt (e.g. "Enter file path:", "Escribe el nombre:")
