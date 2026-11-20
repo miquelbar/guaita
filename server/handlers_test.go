@@ -703,3 +703,72 @@ func TestHandleWebSocket_StreamsPromptOptionsAndDispatchesOptionActions(t *testi
 		t.Errorf("expected dispatched action ('2', 'w1:p2'), got (%q, %q)", capturedAction, capturedPane)
 	}
 }
+
+func TestNormalizePromptKey_StableAcrossTimerAndSpinnerUpdates(t *testing.T) {
+	opts := []notify.NotificationOption{
+		{Key: "1", Label: "Yes"},
+		{Key: "2", Label: "No"},
+	}
+
+	key1 := normalizePromptKey("confirm", "Allow file edit? [0:12] · 128tokens\n❯ 1. Yes\n  2. No", opts)
+	key2 := normalizePromptKey("confirm", "Allow file edit? [0:15] · 140tokens\n› 1. Yes\n  2. No", opts)
+
+	if key1 != key2 {
+		t.Fatalf("expected keys to be identical despite timer/spinner differences:\nkey1=%q\nkey2=%q", key1, key2)
+	}
+}
+
+func TestDispatchWaitingStatuses_SuppressesPushAlertsForIdleQuestionsWithoutOptions(t *testing.T) {
+	dispatcher := notify.NewDispatcher()
+	srv := New(Config{SessionToken: "test", Dispatcher: dispatcher})
+
+	// 1. Idle conversational question without choices is filtered out from push dispatcher
+	idleQuestion := []herdr.AgentStatus{
+		{
+			PaneID:        "w1:p1",
+			PromptType:    "question",
+			PromptText:    "Any other questions?",
+			PromptOptions: nil,
+			AgentState:    "idle",
+			Waiting:       true,
+		},
+	}
+	srv.dispatchWaitingStatuses(idleQuestion)
+	if dispatcher.IsWaitingConsumed("w1:p1") || dispatcher.ClaimWaiting("w1:p1") != notify.ClaimMissing {
+		t.Errorf("expected idle conversational question to NOT be registered in notification dispatcher")
+	}
+
+	// 2. Blocked question from orchestrator IS registered
+	blockedQuestion := []herdr.AgentStatus{
+		{
+			PaneID:        "w1:p2",
+			PromptType:    "question",
+			PromptText:    "Enter API key:",
+			PromptOptions: nil,
+			AgentState:    "blocked",
+			Waiting:       true,
+		},
+	}
+	srv.dispatchWaitingStatuses(blockedQuestion)
+	if dispatcher.ClaimWaiting("w1:p2") != notify.ClaimAcquired {
+		t.Errorf("expected blocked question from orchestrator to be registered in notification dispatcher")
+	}
+
+	// 3. Question with interactive options IS registered
+	questionWithOptions := []herdr.AgentStatus{
+		{
+			PaneID:     "w1:p3",
+			PromptType: "question",
+			PromptText: "Which engine?",
+			PromptOptions: []herdr.PromptOption{
+				{Key: "1", Label: "PostgreSQL"},
+			},
+			AgentState: "idle",
+			Waiting:    true,
+		},
+	}
+	srv.dispatchWaitingStatuses(questionWithOptions)
+	if dispatcher.ClaimWaiting("w1:p3") != notify.ClaimAcquired {
+		t.Errorf("expected question with options to be registered in notification dispatcher")
+	}
+}

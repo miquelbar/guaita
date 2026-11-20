@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -875,20 +876,57 @@ func (s *Server) maskConsumedWaiting(status *herdr.AgentStatus) {
 	}
 }
 
+var (
+	promptTimerRegex   = regexp.MustCompile(`(?i)(\b\d+[smhd]\b|\[\d+:\d+\]|\(\d+s\)|\b\d+m\d+s\b)`)
+	promptClockRegex   = regexp.MustCompile(`\b\d{1,2}:\d{2}(:\d{2})?\b`)
+	promptCounterRegex = regexp.MustCompile(`(?i)\b\d+\s*(tokens|bytes|kb|mb|gb|ms)\b`)
+	promptCursorRegex  = regexp.MustCompile(`[❯›»*•\-_=│┃║|/\\—─▌_]+`)
+)
+
+func normalizePromptKey(promptType, promptText string, options []notify.NotificationOption) string {
+	raw := promptText
+	if lines := strings.Split(strings.TrimSpace(promptText), "\n"); len(lines) > 0 {
+		raw = lines[0]
+		for _, l := range lines {
+			trimmed := strings.TrimSpace(l)
+			if trimmed != "" && !strings.HasPrefix(trimmed, "─") && !strings.HasPrefix(trimmed, "═") {
+				raw = trimmed
+				break
+			}
+		}
+	}
+	cleaned := promptTimerRegex.ReplaceAllString(raw, "")
+	cleaned = promptClockRegex.ReplaceAllString(cleaned, "")
+	cleaned = promptCounterRegex.ReplaceAllString(cleaned, "")
+	cleaned = promptCursorRegex.ReplaceAllString(cleaned, "")
+	cleaned = strings.Join(strings.Fields(cleaned), " ")
+
+	optKeys := make([]string, 0, len(options))
+	for _, o := range options {
+		optKeys = append(optKeys, o.Key)
+	}
+
+	return fmt.Sprintf("%s:%s:opts=%s", promptType, cleaned, strings.Join(optKeys, ","))
+}
+
 // StartMonitor polls statusProvider in the background and dispatches notifications
 // even when no browser or mobile WebSocket client is connected.
 func (s *Server) StartMonitor(stop <-chan struct{}) {
 	go herdr.WatchAgentBlocked(stop, func() {
-		_, waiting, _, _ := s.pollStatus()
-		s.dispatchWaitingStatuses(waiting)
+		_, waiting, _, err := s.pollStatus()
+		if err == nil {
+			s.dispatchWaitingStatuses(waiting)
+		}
 	})
 
 	ticker := time.NewTicker(s.cfg.PollInterval)
 	defer ticker.Stop()
 
 	for {
-		_, waiting, _, _ := s.pollStatus()
-		s.dispatchWaitingStatuses(waiting)
+		_, waiting, _, err := s.pollStatus()
+		if err == nil {
+			s.dispatchWaitingStatuses(waiting)
+		}
 
 		select {
 		case <-stop:
@@ -905,6 +943,12 @@ func (s *Server) dispatchWaitingStatuses(waiting []herdr.AgentStatus) {
 	events := make([]notify.NotificationEvent, 0, len(waiting))
 	baseURL := s.BaseURL()
 	for _, st := range waiting {
+		// Suppress push alerts (Telegram, ntfy) for open conversational questions without options
+		// when the agent is idle (not explicitly blocked by the orchestrator).
+		if st.PromptType == "question" && len(st.PromptOptions) == 0 && st.AgentState != "blocked" {
+			continue
+		}
+
 		label := "Approval Required"
 		if len(st.PromptOptions) > 0 {
 			label = fmt.Sprintf("Options Menu (%d Choices)", len(st.PromptOptions))
@@ -915,10 +959,6 @@ func (s *Server) dispatchWaitingStatuses(waiting []herdr.AgentStatus) {
 		if st.PaneID != "" {
 			title = fmt.Sprintf("🛡️ Guaita [%s]: %s", st.PaneID, label)
 		}
-		promptKey := ""
-		if st.PromptType != "" || st.PromptText != "" {
-			promptKey = st.PromptType + ":" + st.PromptText
-		}
 
 		notifOpts := make([]notify.NotificationOption, 0, len(st.PromptOptions))
 		for _, o := range st.PromptOptions {
@@ -928,6 +968,7 @@ func (s *Server) dispatchWaitingStatuses(waiting []herdr.AgentStatus) {
 				Style: o.Style,
 			})
 		}
+		promptKey := normalizePromptKey(st.PromptType, st.PromptText, notifOpts)
 
 		events = append(events, notify.NotificationEvent{
 			Title:      title,

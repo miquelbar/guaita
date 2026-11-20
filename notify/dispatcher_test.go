@@ -564,3 +564,24 @@ func TestDispatcher_RetriesFailedDeliveryAndNewPromptKey(t *testing.T) {
 	}
 	flaky.mu.Unlock()
 }
+
+func TestDispatcher_TerminalResolutionCleansUpWaitingState(t *testing.T) {
+	d := NewDispatcher()
+	resNotifier := &mockResolutionNotifier{resolved: make(chan string, 2)}
+	d.Register(resNotifier)
+
+	ev := NotificationEvent{PaneID: "w1:p1", PromptKey: "confirm:test"}
+	d.SyncWaitingPanes([]NotificationEvent{ev})
+
+	// When pane disappears from active waiting list (user answered in terminal)
+	d.SyncWaitingPanes([]NotificationEvent{})
+
+	select {
+	case got := <-resNotifier.resolved:
+		if got != "w1:p1:completed" {
+			t.Fatalf("expected w1:p1:completed resolution, got %s", got)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("timed out waiting for terminal resolution notification")
+	}
+}

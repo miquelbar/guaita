@@ -88,15 +88,47 @@ func (t *TelegramNotifier) Close() {
 func (t *TelegramNotifier) BeginPending(paneID string) {
 	key := paneKey(paneID)
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if t.messages == nil {
 		t.messages = make(map[string]telegramMessage)
 	}
 	if t.resolved == nil {
 		t.resolved = make(map[string]string)
 	}
+	oldMsg := t.messages[key]
 	delete(t.messages, key)
 	delete(t.resolved, key)
+	t.mu.Unlock()
+
+	if oldMsg.ID != 0 {
+		go t.removeKeyboard(oldMsg.ID)
+	}
+}
+
+func (t *TelegramNotifier) removeKeyboard(messageID int64) {
+	if t.Token == "" || t.ChatID == "" || messageID == 0 {
+		return
+	}
+	payload := map[string]interface{}{
+		"chat_id":    t.ChatID,
+		"message_id": messageID,
+		"reply_markup": map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{},
+		},
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/editMessageReplyMarkup", t.Token)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(b))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.Client.Do(req)
+	if err == nil {
+		resp.Body.Close()
+	}
 }
 
 func truncateRunesTail(s string, maxRunes int) string {
@@ -160,6 +192,21 @@ func (t *TelegramNotifier) Notify(event NotificationEvent) error {
 			{"text": "↵ Send Enter", "callback_data": enterData},
 			{"text": "⎋ Cancel (Esc)", "callback_data": escData},
 		})
+	} else if strings.Contains(strings.ToLower(event.Title), "question") {
+		if event.PairingURL != "" {
+			keyboard = [][]map[string]string{
+				{
+					{"text": "📱 Open Guaita to Reply", "url": event.PairingURL},
+				},
+			}
+		} else {
+			keyboard = [][]map[string]string{
+				{
+					{"text": "↵ Send Enter", "callback_data": "enter"},
+					{"text": "⎋ Cancel (Esc)", "callback_data": "esc"},
+				},
+			}
+		}
 	} else {
 		approveData := "approve"
 		rejectData := "reject"
@@ -255,6 +302,8 @@ func (t *TelegramNotifier) Resolve(paneID, action string) error {
 		label = "✅ APPROVED"
 	case "reject", "no", "n":
 		label = "❌ REJECTED"
+	case "completed", "resolved", "done":
+		label = "✅ RESOLVED IN TERMINAL"
 	default:
 		label = fmt.Sprintf("✅ OPTION SELECTED (%s)", html.EscapeString(action))
 	}

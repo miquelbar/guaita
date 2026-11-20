@@ -133,7 +133,8 @@ var (
 	footerHintRegex          = regexp.MustCompile(`(?i)(press enter|enter to confirm|esc to cancel|use arrow keys|navigate with|arrow keys|\?\s+for\s+shortcuts|shift\+tab)`)
 	inlineSlashChoiceRegex   = regexp.MustCompile(`(?i)[\[\(]([a-z0-9]+(?:/[a-z0-9]+)+)[\]\)]`)
 	inputPromptRegex         = regexp.MustCompile(`(?i)(^(please\s+|por\s+favor\s+)?(enter|type|input|specify|provide|write|escribe|introduce|indica|ingresa|especifica)\b[^.!?\n]{2,90}[:?]\s*$|\b(enter|type|input|specify|provide|write|escribe|introduce|indica|ingresa|especifica)\s+(your|the|a|an|tu|el|la|los|las|un|una)\s+[^.!?\n]{2,70}[:?]\s*$)`)
-	shellPromptRegex         = regexp.MustCompile(`(\S+@\S+.*[%$#]\s*$|^[\w.-]+:\S*\s*[%$#]\s*$|^bash-[0-9.]+[$#]\s*$)`)
+	shellPromptRegex         = regexp.MustCompile(`(?m)(\S+@\S+.*[%$#]\s*$|^[\w.-]+:\S*\s*[%$#]\s*$|^bash-[0-9.]+[$#]\s*$|^[❯➜›»>]\s*$|^[\w@~.-]+\s*[$#%❯➜›»>]\s*$)`)
+	menuCursorPrefixRegex    = regexp.MustCompile(`^[>❯›»*]\s*`)
 	tuiBorderRegex           = regexp.MustCompile(`^[\s─━═╌╍┄┅┈┉╭╮╯╰┌┐┘└├┤┬┴┼│┃║\-_=*]+$`)
 	tuiInputPlaceholderRegex = regexp.MustCompile(`(?i)^[│┃║]?\s*[>❯›»]\s*(type a message.*|reply.*|send a message.*|ask anything.*|enter a prompt.*)?\s*[│┃║]?$`)
 	tuiFooterHintRegex       = regexp.MustCompile(`(?i)^\s*(\?\s+for\s+shortcuts|shift\+tab\b|ctrl\+[cd]\s+to\b|esc\s+to\s+interrupt\b|context:\s*\d+%|tokens:\s*\d+)`)
@@ -266,9 +267,13 @@ func extractMenuOptions(contentLines []string) ([]PromptOption, int, int) {
 	// 1. Try numbered options (scanned backwards from endIdx - 1)
 	collected := make([]rawOpt, 0)
 	curr := endIdx - 1
+	hasCursorMarker := false
 	for curr >= 0 {
 		line := contentLines[curr]
 		if m := numberedOptionLineRegex.FindStringSubmatch(line); m != nil {
+			if menuCursorPrefixRegex.MatchString(line) {
+				hasCursorMarker = true
+			}
 			num := m[1]
 			if num == "" {
 				num = m[2]
@@ -293,22 +298,38 @@ func extractMenuOptions(contentLines []string) ([]PromptOption, int, int) {
 			collected[i], collected[j] = collected[j], collected[i]
 		}
 		opts := make([]PromptOption, len(collected))
+		hasActionStyle := false
 		for i, r := range collected {
 			opts[i] = PromptOption{
 				Key:   r.key,
 				Label: r.label,
 				Style: detectOptionStyle(r.label, r.key),
 			}
+			if opts[i].Style == "approve" || opts[i].Style == "always" || opts[i].Style == "reject" {
+				hasActionStyle = true
+			}
 		}
-		return opts, curr + 1, endIdx
+		hasFooterHint := endIdx < len(contentLines)
+		if !hasFooterHint && curr >= 0 {
+			hasFooterHint = footerHintRegex.MatchString(contentLines[curr])
+		}
+		// A numbered list is an interactive menu ONLY if it has interactive indicators:
+		// an active cursor indicator, a footer navigation hint, action/approval styles.
+		if hasCursorMarker || hasFooterHint || hasActionStyle {
+			return opts, curr + 1, endIdx
+		}
 	}
 
 	// 2. Try lettered options: a) Yes b) No
 	collected = make([]rawOpt, 0)
 	curr = endIdx - 1
+	hasCursorMarker = false
 	for curr >= 0 {
 		line := contentLines[curr]
 		if m := letteredOptionLineRegex.FindStringSubmatch(line); m != nil {
+			if menuCursorPrefixRegex.MatchString(line) {
+				hasCursorMarker = true
+			}
 			letter := m[1]
 			if letter == "" {
 				letter = m[2]
@@ -329,14 +350,24 @@ func extractMenuOptions(contentLines []string) ([]PromptOption, int, int) {
 			collected[i], collected[j] = collected[j], collected[i]
 		}
 		opts := make([]PromptOption, len(collected))
+		hasActionStyle := false
 		for i, r := range collected {
 			opts[i] = PromptOption{
 				Key:   r.key,
 				Label: r.label,
 				Style: detectOptionStyle(r.label, r.key),
 			}
+			if opts[i].Style == "approve" || opts[i].Style == "always" || opts[i].Style == "reject" {
+				hasActionStyle = true
+			}
 		}
-		return opts, curr + 1, endIdx
+		hasFooterHint := endIdx < len(contentLines)
+		if !hasFooterHint && curr >= 0 {
+			hasFooterHint = footerHintRegex.MatchString(contentLines[curr])
+		}
+		if hasCursorMarker || hasFooterHint || hasActionStyle {
+			return opts, curr + 1, endIdx
+		}
 	}
 
 	// 3. Try inline slash choice on last line, e.g. "Allow? [y/N/a]"
@@ -478,8 +509,14 @@ func analyzePrompt(outputText, agentState string, initiallyWaiting bool) (bool, 
 	}
 
 	// 3. Check for conversational or interactive question when the agent is not actively streaming ("working")
-	if agentState != "working" || initiallyWaiting {
+	if initiallyWaiting {
 		if isQuestionLine(lastContent) {
+			return true, "question", extractQuestionBlock(contentLines), nil
+		}
+	} else if agentState != "working" {
+		// Only consider an unblocked agent as waiting on a question if it has trailing TUI chrome
+		// (e.g. an interactive agent TUI prompt box with input cursor)
+		if contentEnd < len(nonEmpty) && isQuestionLine(lastContent) {
 			return true, "question", extractQuestionBlock(contentLines), nil
 		}
 	}

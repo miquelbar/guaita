@@ -229,8 +229,17 @@ func (d *Dispatcher) SyncWaitingPanes(events []NotificationEvent) {
 			d.deliverMissingLocked(key, ev)
 		}
 	}
-	for k := range d.waitingByPane {
+	for k, st := range d.waitingByPane {
 		if !activeKeys[k] {
+			if st == waitingPending || st == waitingResolving {
+				for _, notifier := range d.notifiers {
+					if resolver, ok := notifier.(ResolutionNotifier); ok {
+						go func(res ResolutionNotifier, pane string) {
+							_ = res.Resolve(pane, "completed")
+						}(resolver, k)
+					}
+				}
+			}
 			d.deletePaneStateLocked(k)
 		}
 	}

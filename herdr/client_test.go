@@ -432,6 +432,33 @@ func TestAnalyzePrompt_QuestionAndConfirmClassification(t *testing.T) {
 			wantType:         "",
 			wantTextContains: "",
 		},
+		{
+			name:             "markdown numbered list in agent answer is not an options menu",
+			output:           "I have finished the tasks:\n1. Fixed auth vulnerability\n2. Added unit tests\n3. Verified build",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      false,
+			wantType:         "",
+			wantTextContains: "",
+		},
+		{
+			name:             "plain shell output ending with question mark is not waiting",
+			output:           "git commit message: why did test fail?\nmiquel@mac ~ %",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      false,
+			wantType:         "",
+			wantTextContains: "",
+		},
+		{
+			name:             "plain terminal question without TUI chrome is not waiting",
+			output:           "Ran linter. Did you mean to use fmt.Sprintf?",
+			agentState:       "idle",
+			initiallyWaiting: false,
+			wantWaiting:      false,
+			wantType:         "",
+			wantTextContains: "",
+		},
 	}
 
 	for _, tc := range cases {
